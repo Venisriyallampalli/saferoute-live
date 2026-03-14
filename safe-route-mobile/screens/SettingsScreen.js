@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import { View, Text, Switch, ScrollView, TouchableOpacity } from 'react-native';
-import { Shield, Bell, Map, Eye, Lock, ChevronRight, UserCircle2 } from 'lucide-react-native';
+import { Shield, Bell, Map, Eye, Lock, ChevronRight, UserCircle2, LogOut } from 'lucide-react-native';
+import { useAuth } from '../context/AuthContext';
 
 export default function SettingsScreen() {
+  const { user, logout } = useAuth();
+
   const [settings, setSettings] = useState({
     location: true,
     nightMode: false,
@@ -58,7 +61,7 @@ export default function SettingsScreen() {
                 <UserCircle2 size={32} color="white" />
              </View>
              <View>
-               <Text className="text-white font-black text-lg">SafeRoute User</Text>
+               <Text className="text-white font-black text-lg">{user?.name || 'SafeRoute User'}</Text>
                <Text className="text-blue-100 text-xs">Premium Safety Member</Text>
              </View>
            </View>
@@ -111,6 +114,14 @@ export default function SettingsScreen() {
           <LinkItem icon={Lock} label="Security Passcode" subtext="Not Configured" />
           <LinkItem icon={Shield} label="Manage Trusted Contacts" />
         </View>
+
+        <TouchableOpacity
+          className="bg-red-500 rounded-2xl px-5 py-4 mb-8 flex-row items-center justify-center"
+          onPress={logout}
+        >
+          <LogOut size={18} color="white" />
+          <Text className="text-white font-bold ml-2">Logout</Text>
+        </TouchableOpacity>
 
         <View className="items-center pb-10">
           <Text className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">SafeRoute Live Mobile v1.0.0</Text>
