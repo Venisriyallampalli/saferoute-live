@@ -3,9 +3,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 const AuthContext = createContext(null);
+const TOKEN_STORAGE_KEY = 'saferoute_auth_token';
+const LEGACY_TOKEN_KEY = 'token';
 
-// Default to a deployed URL if known, else standard localhost for simulator (10.0.2.2 for Android req'd if testing Android emulator)
-const API_BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001';
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  (Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001');
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -16,10 +19,12 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const loadToken = async () => {
       try {
-        const storedToken = await AsyncStorage.getItem('token');
+        const storedToken = await AsyncStorage.getItem(TOKEN_STORAGE_KEY);
         if (storedToken) {
           setToken(storedToken);
         } else {
+          // Cleanup old generic key to avoid accidental auto-login from legacy builds.
+          await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
           setLoading(false);
         }
       } catch (e) {
@@ -48,13 +53,13 @@ export const AuthProvider = ({ children }) => {
         const data = await response.json();
         setUser(data.user);
       } else {
-        await AsyncStorage.removeItem('token');
+        await AsyncStorage.multiRemove([TOKEN_STORAGE_KEY, LEGACY_TOKEN_KEY]);
         setToken(null);
         setUser(null);
       }
     } catch (error) {
       console.error('Error fetching user:', error);
-      await AsyncStorage.removeItem('token');
+      await AsyncStorage.multiRemove([TOKEN_STORAGE_KEY, LEGACY_TOKEN_KEY]);
       setToken(null);
       setUser(null);
     } finally {
@@ -73,7 +78,7 @@ export const AuthProvider = ({ children }) => {
       const data = await response.json();
 
       if (response.ok && data.token) {
-        await AsyncStorage.setItem('token', data.token);
+        await AsyncStorage.setItem(TOKEN_STORAGE_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
         return { success: true, user: data.user };
@@ -96,13 +101,57 @@ export const AuthProvider = ({ children }) => {
       const data = await response.json();
 
       if (response.ok && data.token) {
-        await AsyncStorage.setItem('token', data.token);
+        await AsyncStorage.setItem(TOKEN_STORAGE_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
         return { success: true, user: data.user };
       } else {
         return { success: false, error: data.message || 'Registration failed' };
       }
+    } catch (error) {
+      return { success: false, error: 'Network error. Please try again.' };
+    }
+  };
+
+  const forgotPassword = async (email) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        return { success: false, error: data.message || 'Failed to start password reset' };
+      }
+
+      return {
+        success: true,
+        message: data.message || 'Password reset started',
+        resetToken: data.resetToken || null,
+      };
+    } catch (error) {
+      return { success: false, error: 'Network error. Please try again.' };
+    }
+  };
+
+  const resetPassword = async (resetToken, newPassword) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, newPassword })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        return { success: false, error: data.message || 'Failed to reset password' };
+      }
+
+      return { success: true, message: data.message || 'Password reset successfully' };
     } catch (error) {
       return { success: false, error: 'Network error. Please try again.' };
     }
@@ -115,7 +164,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
-    await AsyncStorage.removeItem('token');
+    await AsyncStorage.multiRemove([TOKEN_STORAGE_KEY, LEGACY_TOKEN_KEY]);
     setToken(null);
     setUser(null);
   };
@@ -123,9 +172,12 @@ export const AuthProvider = ({ children }) => {
   const value = {
     user,
     token,
+    apiBaseUrl: API_BASE_URL,
     loading,
     login,
     register,
+    forgotPassword,
+    resetPassword,
     loginWithGoogle,
     logout,
     isAuthenticated: !!user
