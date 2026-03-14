@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-const API_BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001';
+const API_BASE_URL = "http://192.168.1.14:3001";
 
 export async function getRouteFromChat(prompt) {
   const res = await fetch(`${API_BASE_URL}/api/getRouteFromChat`, {
