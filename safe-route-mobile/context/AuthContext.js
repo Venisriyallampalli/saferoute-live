@@ -5,7 +5,7 @@ import { Platform } from 'react-native';
 const AuthContext = createContext(null);
 
 // Default to a deployed URL if known, else standard localhost for simulator (10.0.2.2 for Android req'd if testing Android emulator)
-const API_BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001');
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
