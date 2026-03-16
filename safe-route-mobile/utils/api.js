@@ -1,7 +1,11 @@
 import { Platform } from 'react-native';
 
+<<<<<<< HEAD
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001');
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
+=======
+const API_BASE_URL = "http://192.168.1.14:3001";
+>>>>>>> e0bc039d6299394d08f5d175f2e37899586dd9f4
 
 export async function getRouteFromChat(prompt) {
   const res = await fetch(`${API_BASE_URL}/api/getRouteFromChat`, {
