@@ -10,6 +10,9 @@ const MapView = ({ children, style }) => (
 );
 
 export const Marker = ({ children }) => <View>{children}</View>;
+export const Polyline = () => null;
+export const UrlTile = () => null;
+export const Callout = ({ children }) => <View>{children}</View>;
 export const PROVIDER_GOOGLE = 'google';
 
 export default MapView;

@@ -6,13 +6,18 @@ import { useAuth } from '../context/AuthContext';
 import HomeScreen from '../screens/HomeScreen';
 import MapScreen from '../screens/MapScreen';
 import ContactsScreen from '../screens/ContactsScreen';
-import ChatScreen from '../screens/ChatScreen';
+import SafetyChatScreen from '../screens/SafetyChatScreen';
 import SafetyReportScreen from '../screens/SafetyReportScreen';
 import SettingsScreen from '../screens/SettingsScreen';
+import RoutePlannerScreen from '../screens/RoutePlannerScreen';
+import DashboardScreen from '../screens/DashboardScreen';
+import ShareLiveScreen from '../screens/ShareLiveScreen';
+import SosScreen from '../screens/SosScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import ResetPasswordScreen from '../screens/ResetPasswordScreen';
+import ProfileScreen from '../screens/ProfileScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -28,25 +33,33 @@ export default function AppNavigator() {
     );
   }
 
-  if (!isAuthenticated) {
-    return (
-      <Stack.Navigator initialRouteName="Login">
-        <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="Register" component={RegisterScreen} options={{ title: 'Create Account' }} />
-        <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} options={{ title: 'Forgot Password' }} />
-        <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ title: 'Reset Password' }} />
-      </Stack.Navigator>
-    );
-  }
-
   return (
-    <Stack.Navigator initialRouteName="Home">
-      <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Map" component={MapScreen} options={{ title: 'Live Navigation' }} />
-      <Stack.Screen name="Contacts" component={ContactsScreen} options={{ title: 'Emergency Contacts' }} />
-      <Stack.Screen name="Chat" component={ChatScreen} options={{ title: 'Safety Chat' }} />
-      <Stack.Screen name="HazardReport" component={SafetyReportScreen} options={{ title: 'Report Hazard' }} />
-      <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      {!isAuthenticated ? (
+        // Auth Stack
+        <>
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: true, title: 'Create Account' }} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} options={{ headerShown: true, title: 'Forgot Password' }} />
+          <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ headerShown: true, title: 'Reset Password' }} />
+        </>
+      ) : (
+        // App Stack
+        <>
+          <Stack.Screen name="Home" component={HomeScreen} />
+          <Stack.Screen name="Map" component={MapScreen} />
+          <Stack.Screen name="RouteSelection" component={RoutePlannerScreen} />
+          <Stack.Screen name="Dashboard" component={DashboardScreen} />
+          <Stack.Screen name="ShareLive" component={ShareLiveScreen} />
+          <Stack.Screen name="Sos" component={SosScreen} />
+          
+          <Stack.Screen name="Contacts" component={ContactsScreen} options={{ headerShown: true, title: 'Emergency Contacts' }} />
+          <Stack.Screen name="SafetyChat" component={SafetyChatScreen} options={{ headerShown: true, title: 'Safety Chat' }} />
+          <Stack.Screen name="HazardReport" component={SafetyReportScreen} options={{ headerShown: true, title: 'Report Hazard' }} />
+          <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: true, title: 'Settings' }} />
+          <Stack.Screen name="Profile" component={ProfileScreen} />
+        </>
+      )}
     </Stack.Navigator>
   );
 }

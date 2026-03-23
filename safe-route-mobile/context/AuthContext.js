@@ -1,14 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { API_BASE_URL } from '../utils/config';
+import { AUTH_TOKEN_KEY, LEGACY_TOKEN_KEY } from '../utils/storageKeys';
 
 const AuthContext = createContext(null);
-const TOKEN_STORAGE_KEY = 'saferoute_auth_token';
-const LEGACY_TOKEN_KEY = 'token';
-// Default to a deployed URL if known, else standard localhost for simulator (10.0.2.2 for Android req'd if testing Android emulator)
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001');
-
-
+const TOKEN_STORAGE_KEY = AUTH_TOKEN_KEY;
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -156,10 +152,36 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const loginWithGoogle = () => {
-    // In React Native, window.location.href won't work.
-    // For a real mobile implementation, use expo-auth-session or equivalent Google Sign In package. 
-    console.warn("Google Sign in requires a React Native OAuth provider setup.");
+  const loginWithGoogle = async (googleData) => {
+     try {
+       const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(googleData)
+       });
+ 
+       const data = await response.json();
+ 
+       if (response.ok && data.token) {
+         await AsyncStorage.setItem(TOKEN_STORAGE_KEY, data.token);
+         setToken(data.token);
+         setUser(data.user);
+         return { success: true };
+       }
+       return { success: false, error: data.message || 'Google login failed' };
+     } catch (error) {
+       return { success: false, error: 'Network error connecting to backend.' };
+     }
+  };
+
+  const setGuestUser = () => {
+    setUser({ 
+      id: 'guest_' + Math.random().toString(36).substr(2, 9),
+      name: 'Guest Explorer',
+      email: 'guest@saferoute.live',
+      phone: 'Not provided',
+      isGuest: true 
+    });
   };
 
   const logout = async () => {
@@ -179,6 +201,7 @@ export const AuthProvider = ({ children }) => {
     resetPassword,
     loginWithGoogle,
     logout,
+    setGuestUser,
     isAuthenticated: !!user
   };
 

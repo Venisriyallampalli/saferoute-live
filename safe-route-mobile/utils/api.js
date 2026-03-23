@@ -1,11 +1,4 @@
-import { Platform } from 'react-native';
-
-<<<<<<< HEAD
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001');
-const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
-=======
-const API_BASE_URL = "http://192.168.1.14:3001";
->>>>>>> e0bc039d6299394d08f5d175f2e37899586dd9f4
+import { API_BASE_URL, MAPBOX_TOKEN } from './config';
 
 export async function getRouteFromChat(prompt) {
   const res = await fetch(`${API_BASE_URL}/api/getRouteFromChat`, {
@@ -55,7 +48,7 @@ export async function getLighting(coords) {
 }
 
 export async function sendSOSAlert(location, message = 'Emergency SOS Alert') {
-  const res = await fetch(`${API_BASE_URL}/api/sos`, {
+  const res = await fetch(`${API_BASE_URL}/api/sos-alert`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ location, message })
@@ -80,12 +73,12 @@ export async function getAISafetySuggestion(source, destination, routes, lat = n
     destination,
     routes: JSON.stringify(routes)
   });
-  
+
   if (lat !== null && lng !== null) {
     params.append('lat', lat);
     params.append('lng', lng);
   }
-  
+
   const res = await fetch(`${API_BASE_URL}/api/ai-safety-suggestion?${params}`);
   if (!res.ok) throw new Error('Failed to get AI safety suggestion');
   return res.json();
@@ -93,7 +86,7 @@ export async function getAISafetySuggestion(source, destination, routes, lat = n
 
 export async function getAddressSuggestions(query) {
   if (!query || query.length < 2 || !MAPBOX_TOKEN) return [];
-  
+
   try {
     const params = new URLSearchParams({
       access_token: MAPBOX_TOKEN,
@@ -101,13 +94,13 @@ export async function getAddressSuggestions(query) {
       autocomplete: 'true',
       limit: '5'
     });
-    
+
     const res = await fetch(
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?${params}`
     );
-    
+
     if (!res.ok) return [];
-    
+
     const data = await res.json();
     return data.features || [];
   } catch (err) {
@@ -120,7 +113,7 @@ export async function getN8NData(lat = null, lng = null) {
   const params = new URLSearchParams();
   if (lat !== null) params.append('lat', lat);
   if (lng !== null) params.append('lng', lng);
-  
+
   const res = await fetch(`${API_BASE_URL}/api/getN8NData?${params}`);
   if (!res.ok) {
     throw new Error('Failed to fetch n8n data');
@@ -130,25 +123,25 @@ export async function getN8NData(lat = null, lng = null) {
 
 export async function reverseGeocode(longitude, latitude) {
   if (!MAPBOX_TOKEN) return null;
-  
+
   try {
     const params = new URLSearchParams({
       access_token: MAPBOX_TOKEN,
       limit: '1'
     });
-    
+
     const res = await fetch(
       `https://api.mapbox.com/geocoding/v5/mapbox.places/${longitude},${latitude}.json?${params}`
     );
-    
+
     if (!res.ok) return null;
-    
+
     const data = await res.json();
     if (data.features && data.features.length > 0) {
       const feature = data.features[0];
       return feature.place_name || feature.text || null;
     }
-    
+
     return null;
   } catch (err) {
     console.error('Error reverse geocoding:', err);

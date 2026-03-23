@@ -7,14 +7,18 @@ import AppNavigator from './navigation/AppNavigator';
 import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 
+import { ThemeProvider } from './context/ThemeContext';
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
         <SocketProvider>
-          <NavigationContainer>
-            <AppNavigator />
-          </NavigationContainer>
+          <ThemeProvider>
+            <NavigationContainer>
+              <AppNavigator />
+            </NavigationContainer>
+          </ThemeProvider>
         </SocketProvider>
       </AuthProvider>
     </SafeAreaProvider>

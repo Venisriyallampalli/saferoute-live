@@ -1,24 +1,26 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { API_BASE_URL } from '../utils/config';
+import { AUTH_TOKEN_KEY } from '../utils/storageKeys';
 
 const SocketContext = createContext(null);
 
-const WS_URL = process.env.EXPO_PUBLIC_API_BASE_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001');
+const WS_URL = API_BASE_URL;
 
 export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [shareRequests, setShareRequests] = useState([]);
   const [activeSessions, setActiveSessions] = useState([]);
+  const [fusionStats, setFusionStats] = useState({ crowdDensity: 55, trafficFlow: 65 });
   const socketRef = useRef(null);
 
   useEffect(() => {
     let newSocket;
 
     const connectSocket = async () => {
-      const token = await AsyncStorage.getItem('token');
+      const token = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
 
       const socketOptions = {
         transports: ['websocket', 'polling'], // Polling often required on mobile RN 
@@ -71,6 +73,10 @@ export const SocketProvider = ({ children }) => {
         setActiveSessions(prev => prev.filter(s => s.sessionId !== data.sessionId));
       });
 
+      newSocket.on('fusion_stats_update', (data) => {
+        setFusionStats(data);
+      });
+
       setSocket(newSocket);
       socketRef.current = newSocket;
     };
@@ -92,7 +98,8 @@ export const SocketProvider = ({ children }) => {
     shareRequests,
     setShareRequests,
     activeSessions,
-    setActiveSessions
+    setActiveSessions,
+    fusionStats
   };
 
   return (

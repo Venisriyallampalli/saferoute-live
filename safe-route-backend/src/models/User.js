@@ -23,7 +23,12 @@ const userSchema = new mongoose.Schema(
     },
     passwordHash: {
       type: String,
-      required: true,
+      required: false, // Optional for Google-only users
+    },
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true, // Allows null/missing for email-only users
     },
   },
   { timestamps: true }

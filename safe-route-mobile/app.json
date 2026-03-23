@@ -7,11 +7,29 @@
     "icon": "./assets/images/icon.png",
     "scheme": "saferoutemobile",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.saferoute.live",
+      "supportsTablet": true,
+      "config": {
+        "googleMapsApiKey": "AIzaSyBwM1roefK1NyDGhIgodrsdiDZOBKI8hSM"
+      },
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SafeRoute Live needs your location to show it on the map and for safety navigation."
+      }
     },
     "android": {
+      "package": "com.saferoute.live",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBwM1roefK1NyDGhIgodrsdiDZOBKI8hSM"
+        }
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -19,12 +37,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyDMdXfsDekxgaF9H4FuKdv_DylQGADEB24"
-        }
-      }
+      "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
@@ -42,7 +55,8 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": false

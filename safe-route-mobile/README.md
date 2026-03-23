@@ -1,50 +1,67 @@
-# Welcome to your Expo app 👋
+# SafeRoute Live - Mobile Application
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+SafeRoute Live is a safety-aware navigation and monitoring system designed to improve personal travel safety for women, students, and solo travelers. This mobile application is built with **Expo React Native**.
 
-## Get started
+## Key Features
+- **Live Safety Map**: Real-time GPS tracking with safety signal analysis.
+- **Safety-Aware Routing**: Computes safety scores using proximity to help and reported hazards.
+- **Hazard Reporting**: Crowdsourced reporting for harassment, accidents, and environmental risks.
+- **Emergency SOS**: Single-tap broadcast of your live location to trusted contacts.
+- **Navigation Mode**: Active tracking and route progress with constant safety monitoring.
 
-1. Install dependencies
+## Tech Stack
+- **Framework**: Expo (React Native)
+- **Styling**: NativeWind (Tailwind CSS)
+- **Maps**: React Native Maps (Google Maps / OpenStreetMap)
+- **Icons**: Lucide React Native
+- **Backend**: Express.js / MongoDB (Node.js)
 
-   ```bash
-   npm install
-   ```
+## Project Structure
+- `screens/`: Main application views (Home, Map, Profile, etc.)
+- `components/`: Reusable UI components.
+- `services/`: API and third-party service integrations (Location, SOS, Hazards).
+- `context/`: Authentication and Global state.
+- `utils/`: Safety scoring logic and helper functions.
 
-2. Start the app
+## Setup Instructions
 
-   ```bash
-   npx expo start
-   ```
+### 1. Prerequisites
+- Node.js (v18+)
+- Expo Go app on your phone (for testing)
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+### 2. Environment Variables
+Create a `.env` file in the root directory:
+```env
+EXPO_PUBLIC_API_BASE_URL=http://<YOUR_LOCAL_IP>:3001
+EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=YOUR_GOOGLE_KEY
+EXPO_PUBLIC_MAPBOX_TOKEN=YOUR_MAPBOX_TOKEN
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### 3. Installation
+```bash
+npm install
+```
 
-## Learn more
+### 4. Running the App
+```bash
+npx expo start -c
+```
+- Scan the QR code with your phone (Expo Go) to open the app.
+- Ensure your phone is on the same Wi-Fi network as your computer.
 
-To learn more about developing your project with Expo, look at the following resources:
+### 5. Backend Requirements
+Ensure the **SafeRoute Backend** and **MongoDB** are running for authentication and reporting to work.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Safety Scoring Formula (Placeholder)
+The system currently uses an intelligent rule-based scoring method:
+- **Base Score**: 60
+- **+30**: If a Police Station is nearby.
+- **+20**: If a Hospital is nearby.
+- **-20**: If a Hazard is reported nearby.
+- **-10**: During night hours (8 PM - 6 AM).
 
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Emergency Features
+The Red SOS button triggers the `sosService` which:
+1. Gathers your current GPS coordinates.
+2. Identifies your emergency contacts.
+3. Broadcasts a safety alert via the backend.

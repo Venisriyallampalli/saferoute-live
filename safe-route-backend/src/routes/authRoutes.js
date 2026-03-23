@@ -142,6 +142,45 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
+router.post('/google', async (req, res) => {
+  try {
+    const { googleId, email, name, picture } = req.body;
+
+    if (!googleId || !email) {
+      return res.status(400).json({ message: 'Google authentication data is missing' });
+    }
+
+    let user = await User.findOne({ 
+      $or: [{ googleId }, { email: email.toLowerCase().trim() }] 
+    });
+
+    if (user) {
+      // Link account if GoogleId was missing but email matches
+      if (!user.googleId) {
+        user.googleId = googleId;
+        await user.save();
+      }
+    } else {
+      // Create new user
+      user = await User.create({
+        name: name || 'Google User',
+        email: email.toLowerCase().trim(),
+        googleId,
+        phone: 'Not provided', // Google doesn't always provide phone
+      });
+    }
+
+    const token = signToken(user._id);
+
+    return res.status(200).json({
+      token,
+      user: user.toPublicJSON(),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to complete Google sign-in' });
+  }
+});
+
 router.post('/reset-password', async (req, res) => {
   try {
     const { token, newPassword } = req.body;

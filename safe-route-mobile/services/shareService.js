@@ -1,48 +1,9 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { apiRequest } from './apiClient';
 
 /**
  * Share Service
  * Handles API calls for location sharing feature
  */
-
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001');
-
-/**
- * Get JWT token from AsyncStorage
- */
-const getToken = async () => {
-  return await AsyncStorage.getItem('token');
-};
-
-/**
- * Make authenticated API request
- */
-const apiRequest = async (endpoint, options = {}) => {
-  const token = await getToken();
-  
-  if (!token) {
-    const error = new Error('Authentication required. Please login.');
-    error.code = 'NO_TOKEN';
-    throw error;
-  }
-
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-      ...options.headers
-    }
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(error.message || error.error || 'Request failed');
-  }
-
-  return response.json();
-};
 
 /**
  * Create a location sharing request
