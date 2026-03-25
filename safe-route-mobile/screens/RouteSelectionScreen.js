@@ -3,8 +3,8 @@ import { View, Text, TouchableOpacity, TextInput, ScrollView, ActivityIndicator,
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, ChevronDown, Shield, Info, MapPin, Navigation, ArrowLeft, CheckCircle2, ShieldCheck } from 'lucide-react-native';
 import * as Location from 'expo-location';
-import { fetchRoute, geocodeDestination, fetchPlaceSuggestions, getMockSafetyMarkers } from '../services/navigationService';
-import { calculateSafetyScore, getSafetyLabel } from '../utils/safetyScore';
+import { fetchRoute, geocodeDestination, fetchPlaceSuggestions } from '../services/navigationService';
+import { scoreRoutesWithBackend, getScoreColor } from '../services/routeSafetyService';
 
 export default function RouteSelectionScreen({ navigation }) {
   const [sourceInput, setSourceInput] = useState('My Location');
@@ -20,6 +20,8 @@ export default function RouteSelectionScreen({ navigation }) {
   const [activeInput, setActiveInput] = useState(null);
   const [debounceTimer, setDebounceTimer] = useState(null);
   const [origin, setOrigin] = useState(null);
+  const [routeScoresById, setRouteScoresById] = useState({});
+  const [isScoringRoutes, setIsScoringRoutes] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -35,6 +37,25 @@ export default function RouteSelectionScreen({ navigation }) {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (allRoutes.length === 0) return undefined;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const scored = await scoreRoutesWithBackend(allRoutes);
+        const mapped = {};
+        scored.forEach((item) => {
+          mapped[item.route_id] = item;
+        });
+        setRouteScoresById(mapped);
+      } catch (error) {
+        console.warn('Periodic route safety update failed', error);
+      }
+    }, 120000);
+
+    return () => clearInterval(intervalId);
+  }, [allRoutes]);
 
   const handleInputChange = (text, type) => {
     if (type === 'source') setSourceInput(text);
@@ -86,17 +107,24 @@ export default function RouteSelectionScreen({ navigation }) {
       const routes = await fetchRoute(startPoint, destination);
       if (routes && routes.length > 0) {
         setAllRoutes(routes);
+        setIsScoringRoutes(true);
+
+        const scored = await scoreRoutesWithBackend(routes);
+        const mapped = {};
+        scored.forEach((item) => {
+          mapped[item.route_id] = item;
+        });
+        setRouteScoresById(mapped);
       } else {
         Alert.alert('No Route Found', 'Could not find a path between these locations.');
       }
     } catch (error) {
       Alert.alert('Routing Error', 'Failed to calculate routes.');
     } finally {
+      setIsScoringRoutes(false);
       setIsRouting(false);
     }
   };
-
-  const markers = origin ? getMockSafetyMarkers(origin) : { hazards: [], policeStations: [], hospitals: [] };
 
   return (
     <SafeAreaView className="flex-1 bg-white">
@@ -186,14 +214,14 @@ export default function RouteSelectionScreen({ navigation }) {
           {allRoutes.length > 0 && (
             <View className="mt-4">
               <Text className="text-slate-400 text-[10px] font-black uppercase tracking-[2px] mb-4">AI Recommended Routes</Text>
+              {isScoringRoutes && (
+                <Text className="text-slate-500 text-[10px] font-bold mb-3">Updating route safety based on weather and route conditions...</Text>
+              )}
               {allRoutes.map((r, idx) => {
-                const score = calculateSafetyScore({ 
-                  nearbyHazards: markers.hazards, 
-                  nearbyPoliceStations: markers.policeStations, 
-                  nearbyHospitals: markers.hospitals, 
-                  preference: safetyPreference 
-                }) - (idx * 5);
-                const label = getSafetyLabel(score);
+                const scored = routeScoresById[r.id];
+                const score = scored?.safety_score ?? Math.max(35, 88 - (idx * 7));
+                const label = scored?.safety_label || (score >= 80 ? 'Safe' : score >= 60 ? 'Moderate' : 'Risky');
+                const scoreColors = getScoreColor(score);
 
                 return (
                   <TouchableOpacity
@@ -207,8 +235,8 @@ export default function RouteSelectionScreen({ navigation }) {
                           <Text className={`font-black text-lg ${idx === selectedRouteIndex ? 'text-blue-700' : 'text-slate-900'}`}>
                             {idx === 0 ? 'Optimal Path' : `Alternative ${idx}`}
                           </Text>
-                          <View className={`ml-2 px-2 py-0.5 rounded-md ${label === 'Safe' ? 'bg-emerald-100' : 'bg-amber-100'}`}>
-                             <Text className={`text-[10px] font-black uppercase ${label === 'Safe' ? 'text-emerald-700' : 'text-amber-700'}`}>{label}</Text>
+                          <View className="ml-2 px-2 py-0.5 rounded-md" style={{ backgroundColor: scoreColors.labelBg }}>
+                             <Text className="text-[10px] font-black uppercase" style={{ color: scoreColors.labelText }}>{label}</Text>
                           </View>
                         </View>
                         <Text className="text-slate-500 text-xs font-bold">
@@ -217,8 +245,8 @@ export default function RouteSelectionScreen({ navigation }) {
                       </View>
                       
                       <View className="items-end">
-                         <View className="bg-slate-900 px-3 py-1 rounded-full mb-1">
-                            <Text className="text-white text-[12px] font-black">{score}%</Text>
+                         <View className="px-3 py-1 rounded-full mb-1" style={{ backgroundColor: scoreColors.chipBg }}>
+                           <Text className="text-[12px] font-black" style={{ color: scoreColors.chipText }}>{score}%</Text>
                          </View>
                          <Text className="text-slate-400 text-[9px] font-bold uppercase">Safety Score</Text>
                       </View>
@@ -238,7 +266,8 @@ export default function RouteSelectionScreen({ navigation }) {
                             selectedIndex: idx,
                             source: sourceInput === 'My Location' ? origin : source,
                             destination: destination,
-                            safetyPreference: safetyPreference
+                            safetyPreference: safetyPreference,
+                            routeSafety: scored || null,
                           })}
                         >
                           <Text className="text-white font-black text-sm uppercase">Start Navigation</Text>

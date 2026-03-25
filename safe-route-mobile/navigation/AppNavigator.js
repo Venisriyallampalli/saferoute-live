@@ -55,7 +55,7 @@ export default function AppNavigator() {
           
           <Stack.Screen name="Contacts" component={ContactsScreen} options={{ headerShown: true, title: 'Emergency Contacts' }} />
           <Stack.Screen name="SafetyChat" component={SafetyChatScreen} options={{ headerShown: true, title: 'Safety Chat' }} />
-          <Stack.Screen name="HazardReport" component={SafetyReportScreen} options={{ headerShown: true, title: 'Report Hazard' }} />
+          <Stack.Screen name="HazardReport" component={SafetyReportScreen} options={{ headerShown: false }} />
           <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: true, title: 'Settings' }} />
           <Stack.Screen name="Profile" component={ProfileScreen} />
         </>

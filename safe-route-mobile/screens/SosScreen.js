@@ -23,7 +23,7 @@ export default function SosScreen({ navigation }) {
 
   return (
     <SafeAreaView style={{ backgroundColor: '#0f172a' }} className="flex-1">
-      <GlobalHeader />
+         <GlobalHeader navigation={navigation} />
 
       <View className="flex-1 px-8 items-center justify-center">
          {/* Pulsing Emergency Icon Wrapper */}

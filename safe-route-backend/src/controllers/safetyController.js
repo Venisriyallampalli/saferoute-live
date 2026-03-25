@@ -1,5 +1,8 @@
 const Hazard = require('../models/Hazard');
 const SafeFeed = require('../models/SafeFeed');
+const { createSafetyScorer } = require('../utils/safetyScoring/scorerFactory');
+const { fetchWeatherSnapshot } = require('../utils/safetyScoring/weatherService');
+const { getRouteMidpoint } = require('../utils/safetyScoring/helpers');
 
 /**
  * Report a new hazard (from mobile/admin)
@@ -110,5 +113,98 @@ exports.postToFeed = async (req, res) => {
     res.status(201).json({ success: true, post });
   } catch (error) {
     res.status(500).json({ message: 'Failed to post to feed', error: error.message });
+  }
+};
+
+/**
+ * Score one or more routes with the rule-based safety engine.
+ */
+exports.scoreRoutes = async (req, res) => {
+  try {
+    const {
+      routes,
+      route,
+      weather_api_key: providedWeatherApiKey,
+      scorer = 'rule-based',
+      segment_length_m: segmentLengthMeters,
+      now,
+    } = req.body || {};
+
+    const candidateRoutes = Array.isArray(routes)
+      ? routes
+      : route
+        ? [route]
+        : [];
+
+    if (candidateRoutes.length === 0) {
+      return res.status(400).json({
+        message: 'Provide at least one route with coordinates',
+      });
+    }
+
+    const weatherApiKey = providedWeatherApiKey || process.env.WEATHER_API_KEY;
+    if (!weatherApiKey) {
+      return res.status(400).json({
+        message: 'WEATHER_API_KEY is required (request body weather_api_key or server env WEATHER_API_KEY)',
+      });
+    }
+
+    const scorerImpl = createSafetyScorer(scorer);
+    const effectiveNow = now ? new Date(now) : new Date();
+
+    if (Number.isNaN(effectiveNow.getTime())) {
+      return res.status(400).json({
+        message: 'Invalid now value. Provide a valid ISO timestamp if supplied.',
+      });
+    }
+
+    const scoredRoutes = [];
+
+    for (const currentRoute of candidateRoutes) {
+      const coordinates = Array.isArray(currentRoute.coordinates)
+        ? currentRoute.coordinates
+        : [];
+
+      if (coordinates.length < 2) {
+        return res.status(400).json({
+          message: 'Each route must include at least 2 coordinate points',
+        });
+      }
+
+      const midpoint = getRouteMidpoint(coordinates);
+      const weather = await fetchWeatherSnapshot({
+        latitude: midpoint.latitude,
+        longitude: midpoint.longitude,
+        apiKey: weatherApiKey,
+      });
+
+      const scored = scorerImpl.scoreRoute(currentRoute, {
+        weather,
+        now: effectiveNow,
+        segmentLengthMeters,
+      });
+
+      scoredRoutes.push({
+        ...scored,
+        weather: {
+          condition: weather.rawCondition,
+          description: weather.description,
+          visibility_m: weather.visibilityMeters,
+          rain_mm: weather.rainVolume,
+          temperature_c: weather.temperatureCelsius,
+        },
+      });
+    }
+
+    return res.json({
+      scorer: 'rule-based',
+      updated_at: new Date().toISOString(),
+      routes: scoredRoutes,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Failed to score routes',
+      error: error.message,
+    });
   }
 };

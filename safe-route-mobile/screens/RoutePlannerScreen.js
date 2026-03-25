@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, TextInput, ScrollView, ActivityIndicator, Alert, Dimensions, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, TextInput, ScrollView, ActivityIndicator, Alert, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
-  Search, MapPin, Navigation as RouteIndicator, ArrowLeft, ShieldCheck, 
-  Compass, MessageSquare, Share2, TriangleAlert, AlertTriangle, ChevronDown, X, Zap, Clock, ArrowRight
+  MapPin, Navigation as RouteIndicator, ArrowLeft, ShieldCheck, 
+  Compass, MessageSquare, Share2, TriangleAlert, AlertTriangle, X, Zap, ArrowRight
 } from 'lucide-react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from '../components/MapContainer';
 import { useTheme } from '../context/ThemeContext';
 import GlobalHeader from '../components/GlobalHeader';
-import { fetchRoute, geocodeDestination, fetchPlaceSuggestions, getMockSafetyMarkers } from '../services/navigationService';
+import { fetchRoute, geocodeDestination, fetchPlaceSuggestions } from '../services/navigationService';
+import { scoreRoutesWithBackend, getScoreColor } from '../services/routeSafetyService';
 import * as Location from 'expo-location';
 
 const { width, height } = Dimensions.get('window');
@@ -28,8 +29,10 @@ export default function RoutePlannerScreen({ navigation }) {
   const [allRoutes, setAllRoutes] = useState([]);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [isRouting, setIsRouting] = useState(false);
-  const [showAiModal, setShowAiModal] = useState(false);
   const [region, setRegion] = useState(null);
+  const [routeScoresById, setRouteScoresById] = useState({});
+  const [isScoringRoutes, setIsScoringRoutes] = useState(false);
+  const [lastScoreUpdateAt, setLastScoreUpdateAt] = useState(null);
   
   // Suggestions State
   const [suggestions, setSuggestions] = useState([]);
@@ -68,6 +71,46 @@ export default function RoutePlannerScreen({ navigation }) {
     getCurrentLocation();
   }, []);
 
+  const refreshRouteScores = async (routes, options = {}) => {
+    if (!Array.isArray(routes) || !routes.length) {
+      setRouteScoresById({});
+      return;
+    }
+
+    if (!options.silent) {
+      setIsScoringRoutes(true);
+    }
+
+    try {
+      const scored = await scoreRoutesWithBackend(routes);
+      const scoreMap = {};
+      scored.forEach((item) => {
+        scoreMap[item.route_id] = item;
+      });
+
+      setRouteScoresById(scoreMap);
+      setLastScoreUpdateAt(new Date().toISOString());
+    } catch (error) {
+      console.warn('Route score refresh failed', error);
+    } finally {
+      if (!options.silent) {
+        setIsScoringRoutes(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (currentStep !== 'selection' || allRoutes.length === 0) {
+      return undefined;
+    }
+
+    const intervalId = setInterval(() => {
+      refreshRouteScores(allRoutes, { silent: true });
+    }, 120000);
+
+    return () => clearInterval(intervalId);
+  }, [currentStep, allRoutes]);
+
   const handleBuildRoute = async () => {
     if (!destinationInput.trim()) {
       Alert.alert('Destination required', 'Please enter where you want to go.');
@@ -85,6 +128,7 @@ export default function RoutePlannerScreen({ navigation }) {
       setAllRoutes(routes);
       setSelectedRouteIndex(0);
       setCurrentStep('selection'); // Move to Map phase
+      await refreshRouteScores(routes);
       
       // Auto-zoom map to show route
       setTimeout(() => {
@@ -315,39 +359,67 @@ export default function RoutePlannerScreen({ navigation }) {
 
       {/* Results Bottom Panel */}
       <View className="absolute bottom-10 left-6 right-6">
+        {isScoringRoutes && (
+          <View className="mb-3 bg-white/90 rounded-full px-4 py-2 self-start border border-slate-200">
+            <Text className="text-slate-700 text-[10px] font-black uppercase tracking-wide">Updating safety from weather and live factors...</Text>
+          </View>
+        )}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} className="gap-x-4 mb-4">
-          {allRoutes.map((r, idx) => (
-            <TouchableOpacity 
-              key={r.id}
-              style={{ 
-                backgroundColor: idx === selectedRouteIndex ? theme.primary : colors.surface,
-                width: width * 0.7 
-              }}
-              className="p-6 rounded-[32px] shadow-2xl border border-white/5"
-              onPress={() => setSelectedRouteIndex(idx)}
-            >
-              <View className="flex-row justify-between items-center mb-1">
-                <Text className={`font-black text-lg ${idx === selectedRouteIndex ? 'text-white' : ''}`} style={{ color: idx === selectedRouteIndex ? 'white' : colors.text }}>
-                  {idx === 0 ? 'Fastest Path' : `Alternative ${idx}`}
-                </Text>
-                <View className="bg-slate-900/60 px-3 py-1 rounded-full">
-                  <Text className="text-white text-[10px] font-black">{90 - (idx * 5)}% Safe</Text>
+          {allRoutes.map((r, idx) => {
+            const scored = routeScoresById[r.id];
+            const score = scored?.safety_score ?? Math.max(35, 88 - (idx * 7));
+            const label = scored?.safety_label || (score >= 80 ? 'Safe' : score >= 60 ? 'Moderate' : 'Risky');
+            const scoreColors = getScoreColor(score);
+
+            return (
+              <TouchableOpacity 
+                key={r.id}
+                style={{ 
+                  backgroundColor: idx === selectedRouteIndex ? theme.primary : colors.surface,
+                  width: width * 0.7 
+                }}
+                className="p-6 rounded-[32px] shadow-2xl border border-white/5"
+                onPress={() => setSelectedRouteIndex(idx)}
+              >
+                <View className="flex-row justify-between items-center mb-1">
+                  <Text className={`font-black text-lg ${idx === selectedRouteIndex ? 'text-white' : ''}`} style={{ color: idx === selectedRouteIndex ? 'white' : colors.text }}>
+                    {idx === 0 ? 'Fastest Path' : `Alternative ${idx}`}
+                  </Text>
+                  <View style={{ backgroundColor: scoreColors.chipBg }} className="px-3 py-1 rounded-full">
+                    <Text style={{ color: scoreColors.chipText }} className="text-[10px] font-black">{score}%</Text>
+                  </View>
                 </View>
-              </View>
-              <Text className={`font-bold mb-4 opacity-70 ${idx === selectedRouteIndex ? 'text-white' : ''}`} style={{ color: idx === selectedRouteIndex ? 'white' : colors.textMuted }}>
-                 {Math.ceil(r.durationSeconds / 60)} min • {(r.distanceMeters / 1000).toFixed(1)} km
-              </Text>
-              
-              {idx === selectedRouteIndex && (
-                <TouchableOpacity 
-                  className="bg-white py-4 rounded-2xl items-center shadow-md shadow-black/20"
-                  onPress={() => navigation.navigate('Map', { initialRoute: r })}
-                >
-                  <Text style={{ color: theme.primary }} className="font-black uppercase tracking-widest text-xs">Start Navigation</Text>
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-          ))}
+
+                <View className="flex-row items-center mb-2">
+                  <View style={{ backgroundColor: scoreColors.labelBg }} className="px-2 py-1 rounded-md">
+                    <Text style={{ color: scoreColors.labelText }} className="text-[10px] font-black uppercase">{label}</Text>
+                  </View>
+                  <Text className={`ml-2 text-[10px] font-bold ${idx === selectedRouteIndex ? 'text-white/90' : 'text-slate-500'}`}>
+                    Safety Score
+                  </Text>
+                </View>
+
+                <Text className={`font-bold mb-4 opacity-70 ${idx === selectedRouteIndex ? 'text-white' : ''}`} style={{ color: idx === selectedRouteIndex ? 'white' : colors.textMuted }}>
+                  {Math.ceil(r.durationSeconds / 60)} min • {(r.distanceMeters / 1000).toFixed(1)} km
+                </Text>
+                
+                {idx === selectedRouteIndex && (
+                  <TouchableOpacity 
+                    className="bg-white py-4 rounded-2xl items-center shadow-md shadow-black/20"
+                    onPress={() => navigation.navigate('Map', {
+                      initialRoute: r,
+                      routeSafety: scored || null,
+                      allRoutes,
+                      scoredRoutes: routeScoresById,
+                      scoreUpdatedAt: lastScoreUpdateAt,
+                    })}
+                  >
+                    <Text style={{ color: theme.primary }} className="font-black uppercase tracking-widest text-xs">Start Navigation</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
     </View>
@@ -355,7 +427,7 @@ export default function RoutePlannerScreen({ navigation }) {
 
   return (
     <SafeAreaView style={{ backgroundColor: colors.background }} className="flex-1">
-      <GlobalHeader />
+      <GlobalHeader navigation={navigation} />
       {currentStep === 'input' ? renderInputForm() : renderSelectionView()}
     </SafeAreaView>
   );

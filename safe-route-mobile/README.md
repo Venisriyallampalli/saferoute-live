@@ -35,6 +35,7 @@ Create a `.env` file in the root directory:
 EXPO_PUBLIC_API_BASE_URL=http://<YOUR_LOCAL_IP>:3001
 EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=YOUR_GOOGLE_KEY
 EXPO_PUBLIC_MAPBOX_TOKEN=YOUR_MAPBOX_TOKEN
+EXPO_PUBLIC_WEATHER_API_KEY=YOUR_OPENWEATHER_KEY
 ```
 
 ### 3. Installation
@@ -52,13 +53,18 @@ npx expo start -c
 ### 5. Backend Requirements
 Ensure the **SafeRoute Backend** and **MongoDB** are running for authentication and reporting to work.
 
-## Safety Scoring Formula (Placeholder)
-The system currently uses an intelligent rule-based scoring method:
-- **Base Score**: 60
-- **+30**: If a Police Station is nearby.
-- **+20**: If a Hospital is nearby.
-- **-20**: If a Hazard is reported nearby.
-- **-10**: During night hours (8 PM - 6 AM).
+## Safety Scoring Formula (Rule-Based Engine)
+Route safety score is now fetched from backend `/api/safety/route-score` and computed per route with segment-level analysis:
+
+- Segment length: 50m to 200m
+- Risk factors: crime, accident, weather, traffic, hazard, lighting, time-of-day
+- Weather is fetched from OpenWeatherMap (rain, visibility, temperature, weather condition)
+- Route score = average segment safety * 100
+- Labels:
+	- 80-100: Safe
+	- 60-79: Moderate
+	- 40-59: Risky
+	- <40: High Risk
 
 ## Emergency Features
 The Red SOS button triggers the `sosService` which:

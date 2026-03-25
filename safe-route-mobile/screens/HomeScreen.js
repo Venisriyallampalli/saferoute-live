@@ -10,7 +10,7 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <SafeAreaView style={{ backgroundColor: colors.background }} className="flex-1">
-      <GlobalHeader />
+      <GlobalHeader navigation={navigation} />
       
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
         {/* Hero Section */}

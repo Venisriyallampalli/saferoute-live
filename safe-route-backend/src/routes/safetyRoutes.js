@@ -29,4 +29,7 @@ router.get('/fusion/stats', (req, res) => {
    });
 });
 
+// 4. Route Safety Scoring Engine (rule-based)
+router.post('/route-score', safetyController.scoreRoutes);
+
 module.exports = router;

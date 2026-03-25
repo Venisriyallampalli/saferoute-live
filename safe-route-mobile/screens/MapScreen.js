@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, TextInput, Alert, Platform, StyleSheet, ScrollView } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
 import MapView, { Marker, Polyline, UrlTile, PROVIDER_GOOGLE } from '../components/MapContainer';
 import * as Location from 'expo-location';
 import {
@@ -21,8 +20,7 @@ import { loadContacts } from '../services/contactsService';
 
 import { useTheme } from '../context/ThemeContext';
 
-export default function MapScreen({ route }) {
-  const navigation = useNavigation();
+export default function MapScreen({ route, navigation }) {
   const mapRef = useRef(null);
   const { user } = useAuth();
   const { theme, colors, isDarkMode, setIsDarkMode } = useTheme();

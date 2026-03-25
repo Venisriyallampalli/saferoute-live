@@ -1,10 +1,27 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { API_BASE_URL } from '../utils/config';
 import { AUTH_TOKEN_KEY, LEGACY_TOKEN_KEY } from '../utils/storageKeys';
 
 const AuthContext = createContext(null);
 const TOKEN_STORAGE_KEY = AUTH_TOKEN_KEY;
+
+function uniqueApiBases() {
+  const hostUri = Constants?.expoConfig?.hostUri || '';
+  const hostIp = hostUri.includes(':') ? hostUri.split(':')[0] : '';
+
+  const candidates = [
+    API_BASE_URL,
+    hostIp ? `http://${hostIp}:3001` : null,
+    'http://10.0.2.2:3001',
+    'http://localhost:3001',
+    'http://127.0.0.1:3001',
+  ];
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -36,9 +53,25 @@ export const AuthProvider = ({ children }) => {
     }
   }, [token]);
 
+  const fetchWithBaseFallback = async (path, options = {}) => {
+    const bases = uniqueApiBases();
+    let lastError = null;
+
+    for (const base of bases) {
+      try {
+        const response = await fetch(`${base}${path}`, options);
+        return response;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError || new Error(`Unable to connect to backend. Tried: ${bases.join(', ')}`);
+  };
+
   const fetchUser = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+      const response = await fetchWithBaseFallback('/api/auth/me', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -64,7 +97,7 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+      const response = await fetchWithBaseFallback('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -81,13 +114,13 @@ export const AuthProvider = ({ children }) => {
         return { success: false, error: data.message || 'Login failed' };
       }
     } catch (error) {
-      return { success: false, error: 'Network error. Please try again.' };
+      return { success: false, error: `Network error. Check backend URL in .env (current: ${API_BASE_URL})` };
     }
   };
 
   const register = async (name, email, password, phone) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+      const response = await fetchWithBaseFallback('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password, phone })
@@ -104,13 +137,13 @@ export const AuthProvider = ({ children }) => {
         return { success: false, error: data.message || 'Registration failed' };
       }
     } catch (error) {
-      return { success: false, error: 'Network error. Please try again.' };
+      return { success: false, error: `Network error. Check backend URL in .env (current: ${API_BASE_URL})` };
     }
   };
 
   const forgotPassword = async (email) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
+      const response = await fetchWithBaseFallback('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
@@ -134,7 +167,7 @@ export const AuthProvider = ({ children }) => {
 
   const resetPassword = async (resetToken, newPassword) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
+      const response = await fetchWithBaseFallback('/api/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: resetToken, newPassword })
@@ -154,7 +187,7 @@ export const AuthProvider = ({ children }) => {
 
   const loginWithGoogle = async (googleData) => {
      try {
-       const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
+       const response = await fetchWithBaseFallback('/api/auth/google', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify(googleData)

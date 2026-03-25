@@ -1,21 +1,25 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, FlatList, Pressable } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
 import { Shield, Palette, Moon, Sun, Menu, X, User, Settings, LogOut, Home } from 'lucide-react-native';
 import { useTheme, ThemePresets } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 
-export default function GlobalHeader() {
-  const navigation = useNavigation();
+export default function GlobalHeader({ navigation }) {
   const { theme, themeName, setThemeName, isDarkMode, setIsDarkMode, colors } = useTheme();
   const { logout, user } = useAuth();
   const [showThemePicker, setShowThemePicker] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
 
+  const navigateSafe = (routeName) => {
+    if (navigation && typeof navigation.navigate === 'function') {
+      navigation.navigate(routeName);
+    }
+  };
+
   const menuItems = [
-    { label: 'Home', icon: Home, action: () => navigation.navigate('Home') },
-    { label: 'Profile', icon: User, action: () => navigation.navigate('Profile') },
-    { label: 'Settings', icon: Settings, action: () => navigation.navigate('Settings') },
+    { label: 'Home', icon: Home, action: () => navigateSafe('Home') },
+    { label: 'Profile', icon: User, action: () => navigateSafe('Profile') },
+    { label: 'Settings', icon: Settings, action: () => navigateSafe('Settings') },
     { label: 'Sign Out', icon: LogOut, action: () => logout(), color: '#ef4444' },
   ];
 
@@ -27,7 +31,7 @@ export default function GlobalHeader() {
       {/* App Logo */}
       <TouchableOpacity 
         className="flex-row items-center" 
-        onPress={() => navigation.navigate('Home')}
+        onPress={() => navigateSafe('Home')}
       >
         <Shield size={22} color={theme.primary} fill={theme.primary} />
         <Text 

@@ -11,7 +11,7 @@ export async function loadHazardReports(userId = 'anonymous') {
   const local = await AsyncStorage.getItem(key);
   const localReports = local ? JSON.parse(local) : [];
 
-  const remote = await apiRequestWithFallback('/api/hazards', {}, { hazards: localReports });
+  const remote = await apiRequestWithFallback('/api/safety/hazards', {}, { hazards: localReports });
   const hazards = Array.isArray(remote?.hazards) ? remote.hazards : localReports;
 
   await AsyncStorage.setItem(key, JSON.stringify(hazards));
@@ -38,7 +38,7 @@ export async function submitHazardReport(userId = 'anonymous', report) {
   await AsyncStorage.setItem(key, JSON.stringify(next));
 
   await apiRequestWithFallback(
-    '/api/hazards',
+    '/api/safety/hazards',
     {
       method: 'POST',
       body: JSON.stringify(payload),

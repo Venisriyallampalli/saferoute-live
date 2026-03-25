@@ -48,7 +48,7 @@ const Gauge = ({ value, label, color }) => {
   );
 };
 
-export default function DashboardScreen() {
+export default function DashboardScreen({ navigation }) {
   const { theme, colors } = useTheme();
   const { fusionStats } = useSocket();
   const [showSimulator, setShowSimulator] = useState(false);
@@ -76,7 +76,7 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={{ backgroundColor: colors.background }} className="flex-1">
-      <GlobalHeader />
+         <GlobalHeader navigation={navigation} />
 
       <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
         {/* Live Safety Map Overview */}

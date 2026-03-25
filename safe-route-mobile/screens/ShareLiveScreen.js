@@ -7,7 +7,7 @@ import GlobalHeader from '../components/GlobalHeader';
 
 const { width } = Dimensions.get('window');
 
-export default function ShareLiveScreen() {
+export default function ShareLiveScreen({ navigation }) {
   const { theme, colors } = useTheme();
   const [activeTab, setActiveTab] = useState('Friends');
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,7 +35,7 @@ export default function ShareLiveScreen() {
 
   return (
     <SafeAreaView style={{ backgroundColor: colors.background }} className="flex-1">
-      <GlobalHeader />
+         <GlobalHeader navigation={navigation} />
 
       <View className="px-6 py-6">
          <Text style={{ color: colors.text }} className="text-3xl font-black mb-6">Share Live</Text>
