@@ -22,6 +22,12 @@ Contacts APIs (auth required):
 - GET /api/contacts
 - POST /api/contacts/sync
 
+SOS APIs (auth required):
+
+- POST /api/sos/trigger
+- POST /api/sos/update-location
+- GET /api/sos/active
+
 ## 1. Setup
 
 1. Install dependencies:

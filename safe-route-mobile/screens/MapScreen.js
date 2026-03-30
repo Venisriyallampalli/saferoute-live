@@ -750,24 +750,28 @@ export default function MapScreen({ route, navigation }) {
 
       {/* FLOATING SIDEBAR FOR LIVE NAVIGATION */}
       {isNavigating && (
-        <View className="absolute right-6 top-[25%] gap-y-5 z-[50]">
+        <View className="absolute right-6 top-[25%] gap-y-5 z-[50] items-end">
           {/* Recenter Button as a high-visibility Puck */}
-          <TouchableOpacity 
-            style={{ backgroundColor: colors.surface }} 
-            className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/20"
-            onPress={centerOnUser}
-          >
-            <Compass size={28} color="#ef4444" fill={isDarkMode ? '#ef4444' : 'transparent'} />
-          </TouchableOpacity>
+          <View className="flex-row items-center justify-end">
+            <TouchableOpacity
+              style={{ backgroundColor: colors.surface }}
+              className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/20"
+              onPress={centerOnUser}
+            >
+              <Compass size={28} color="#ef4444" fill={isDarkMode ? '#ef4444' : 'transparent'} />
+            </TouchableOpacity>
+          </View>
 
           {/* Voice Guidance Toggle */}
-          <TouchableOpacity 
-            style={{ backgroundColor: colors.surface }} 
-            className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/20"
-            onPress={handleToggleVoice}
-          >
-            {voiceEnabled ? <Volume2 size={24} color="#6366f1" /> : <VolumeX size={24} color={colors.textMuted} />}
-          </TouchableOpacity>
+          <View className="flex-row items-center justify-end">
+            <TouchableOpacity
+              style={{ backgroundColor: colors.surface }}
+              className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/20"
+              onPress={handleToggleVoice}
+            >
+              {voiceEnabled ? <Volume2 size={24} color="#6366f1" /> : <VolumeX size={24} color={colors.textMuted} />}
+            </TouchableOpacity>
+          </View>
 
           {/* Direct SOS from Nav */}
           <View className="flex-row items-center justify-end">

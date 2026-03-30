@@ -10,6 +10,7 @@ const { connectDatabase } = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const safetyRoutes = require('./routes/safetyRoutes');
 const contactsRoutes = require('./routes/contactsRoutes');
+const sosRoutes = require('./routes/sosRoutes');
 const { getLiveFusionStats } = require('./utils/tomtomTrafficService');
 
 const app = express();
@@ -43,6 +44,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/safety', safetyRoutes);
 app.use('/api/contacts', contactsRoutes);
+app.use('/api/sos', sosRoutes);
 
 // Real-time Socket interactions
 io.on('connection', (socket) => {
