@@ -1,14 +1,35 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { apiRequestWithFallback } from './apiClient';
+import { apiRequest } from './apiClient';
 import { CONTACTS_KEY_PREFIX } from '../utils/storageKeys';
+
+function normalizePhone(phone = '') {
+  return String(phone).replace(/[^+\d]/g, '').trim();
+}
+
+function makeContactId(contact) {
+  if (contact.id || contact._id) {
+    return String(contact.id || contact._id);
+  }
+
+  if (contact.sourceContactId && contact.phone) {
+    return `device:${contact.sourceContactId}:${normalizePhone(contact.phone)}`;
+  }
+
+  if (contact.phone) {
+    return `phone:${normalizePhone(contact.phone)}`;
+  }
+
+  return `manual:${Date.now()}`;
+}
 
 function normalizeContact(contact) {
   return {
-    id: contact.id || contact._id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: makeContactId(contact),
     name: (contact.name || '').trim(),
-    phone: (contact.phone || '').trim(),
+    phone: normalizePhone(contact.phone || ''),
     relation: (contact.relation || 'Trusted').trim(),
     createdAt: contact.createdAt || new Date().toISOString(),
+    sourceContactId: contact.sourceContactId || null,
   };
 }
 
@@ -18,11 +39,12 @@ function getContactsStorageKey(userId = 'anonymous') {
 
 export async function loadContacts(userId = 'anonymous') {
   const key = getContactsStorageKey(userId);
-  const local = await AsyncStorage.getItem(key);
-  const localContacts = local ? JSON.parse(local) : [];
+  const remote = await apiRequest('/api/contacts');
+  if (!remote?.synced) {
+    throw new Error(remote?.message || 'Contacts are not synced with server');
+  }
 
-  const remote = await apiRequestWithFallback('/api/contacts', {}, { contacts: localContacts });
-  const contacts = Array.isArray(remote?.contacts) ? remote.contacts.map(normalizeContact) : localContacts;
+  const contacts = Array.isArray(remote?.contacts) ? remote.contacts.map(normalizeContact) : [];
 
   await AsyncStorage.setItem(key, JSON.stringify(contacts));
   return contacts;
@@ -32,18 +54,21 @@ export async function saveContacts(userId = 'anonymous', contacts = []) {
   const key = getContactsStorageKey(userId);
   const normalized = contacts.map(normalizeContact);
 
-  await AsyncStorage.setItem(key, JSON.stringify(normalized));
+  const remote = await apiRequest('/api/contacts/sync', {
+    method: 'POST',
+    body: JSON.stringify({ contacts: normalized }),
+  });
 
-  await apiRequestWithFallback(
-    '/api/contacts/sync',
-    {
-      method: 'POST',
-      body: JSON.stringify({ contacts: normalized }),
-    },
-    { success: true }
-  );
+  if (!remote?.synced) {
+    throw new Error(remote?.message || 'Contacts sync failed');
+  }
 
-  return normalized;
+  const syncedContacts = Array.isArray(remote?.contacts)
+    ? remote.contacts.map(normalizeContact)
+    : normalized;
+
+  await AsyncStorage.setItem(key, JSON.stringify(syncedContacts));
+  return syncedContacts;
 }
 
 export async function addContact(userId, contact, previousContacts = []) {

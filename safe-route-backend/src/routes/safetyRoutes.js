@@ -15,19 +15,8 @@ router.get('/feed', safetyController.getRecentFeed);
 router.post('/feed', requireAuth, safetyController.postToFeed);
 
 // 3. Fusion Analytics (Mock/Simulation layer for now)
-router.get('/fusion/stats', (req, res) => {
-   // In a real implementation, this would aggregate traffic & places API data.
-   // Providing a baseline score for the dashboard gauges
-   const baseCrowd = 45 + Math.floor(Math.random() * 20);
-   const baseTraffic = 50 + Math.floor(Math.random() * 25);
-   
-   res.json({
-      crowdDensity: baseCrowd,
-      trafficFlow: baseTraffic,
-      status: 'nominal',
-      timestamp: new Date().toISOString()
-   });
-});
+router.get('/fusion/stats', safetyController.getFusionStats);
+router.get('/incidents', safetyController.getLiveIncidents);
 
 // 4. Route Safety Scoring Engine (rule-based)
 router.post('/route-score', safetyController.scoreRoutes);

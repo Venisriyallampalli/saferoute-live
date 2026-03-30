@@ -8,11 +8,24 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from '../components/MapContainer';
 import { useTheme } from '../context/ThemeContext';
 import GlobalHeader from '../components/GlobalHeader';
-import { fetchRoute, geocodeDestination, fetchPlaceSuggestions } from '../services/navigationService';
-import { scoreRoutesWithBackend, getScoreColor } from '../services/routeSafetyService';
+import { TRANSPORT_MODES, fetchRoute, geocodeDestination, fetchPlaceSuggestions } from '../services/navigationService';
+import { scoreRoutesWithBackend, getScoreColor, getDynamicRescoreKey, getSegmentColorBySafety } from '../services/routeSafetyService';
 import * as Location from 'expo-location';
 
 const { width, height } = Dimensions.get('window');
+
+const TRANSPORT_OPTIONS = [
+  { key: TRANSPORT_MODES.HEAVY, label: 'Truck/Bus/Lorry' },
+  { key: TRANSPORT_MODES.CAR, label: 'Car' },
+  { key: TRANSPORT_MODES.BIKE, label: 'Bike' },
+  { key: TRANSPORT_MODES.CYCLE, label: 'Cycle' },
+  { key: TRANSPORT_MODES.WALK, label: 'Walk' },
+];
+
+function getTransportModeLabel(mode) {
+  const found = TRANSPORT_OPTIONS.find((item) => item.key === mode);
+  return found?.label || 'Car';
+}
 
 export default function RoutePlannerScreen({ navigation }) {
   const { theme, colors } = useTheme();
@@ -27,12 +40,14 @@ export default function RoutePlannerScreen({ navigation }) {
   const [source, setSource] = useState(null);
   const [destination, setDestination] = useState(null);
   const [allRoutes, setAllRoutes] = useState([]);
+  const [transportMode, setTransportMode] = useState(TRANSPORT_MODES.CAR);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [isRouting, setIsRouting] = useState(false);
   const [region, setRegion] = useState(null);
   const [routeScoresById, setRouteScoresById] = useState({});
   const [isScoringRoutes, setIsScoringRoutes] = useState(false);
   const [lastScoreUpdateAt, setLastScoreUpdateAt] = useState(null);
+  const lastDynamicKeyRef = useRef('');
   
   // Suggestions State
   const [suggestions, setSuggestions] = useState([]);
@@ -104,12 +119,31 @@ export default function RoutePlannerScreen({ navigation }) {
       return undefined;
     }
 
+    const refreshIfNeeded = async () => {
+      const dynamicKey = await getDynamicRescoreKey();
+      const changed = dynamicKey !== lastDynamicKeyRef.current;
+
+      if (changed) {
+        lastDynamicKeyRef.current = dynamicKey;
+        await refreshRouteScores(allRoutes, { silent: true });
+        return;
+      }
+
+      const lastUpdatedAt = lastScoreUpdateAt ? new Date(lastScoreUpdateAt).getTime() : 0;
+      const staleForMs = Date.now() - lastUpdatedAt;
+      if (!lastUpdatedAt || staleForMs >= 120000) {
+        await refreshRouteScores(allRoutes, { silent: true });
+      }
+    };
+
+    refreshIfNeeded();
+
     const intervalId = setInterval(() => {
-      refreshRouteScores(allRoutes, { silent: true });
-    }, 120000);
+      refreshIfNeeded();
+    }, 30000);
 
     return () => clearInterval(intervalId);
-  }, [currentStep, allRoutes]);
+  }, [currentStep, allRoutes, lastScoreUpdateAt]);
 
   const handleBuildRoute = async () => {
     if (!destinationInput.trim()) {
@@ -120,11 +154,11 @@ export default function RoutePlannerScreen({ navigation }) {
     setIsRouting(true);
     setSuggestions([]); // Clear suggestions
     try {
-      const destPoint = await geocodeDestination(destinationInput);
+      const destPoint = destination || await geocodeDestination(destinationInput);
       if (!destPoint) throw new Error("Destination not found.");
       setDestination(destPoint);
 
-      const routes = await fetchRoute(source, destPoint);
+      const routes = await fetchRoute(source, destPoint, transportMode);
       setAllRoutes(routes);
       setSelectedRouteIndex(0);
       setCurrentStep('selection'); // Move to Map phase
@@ -164,7 +198,19 @@ export default function RoutePlannerScreen({ navigation }) {
   };
 
   const selectSuggestion = (item) => {
-    setDestinationInput(item.description);
+    const selectedName = item.placeName || item.description || item.mainText || destinationInput;
+    setDestinationInput(selectedName);
+
+    if (Number.isFinite(Number(item.latitude)) && Number.isFinite(Number(item.longitude))) {
+      setDestination({
+        latitude: Number(item.latitude),
+        longitude: Number(item.longitude),
+        placeName: selectedName,
+      });
+    } else {
+      setDestination(null);
+    }
+
     setSuggestions([]);
   };
 
@@ -203,6 +249,25 @@ export default function RoutePlannerScreen({ navigation }) {
                  <Compass size={18} color={theme.primary} />
               </TouchableOpacity>
            </View>
+        </View>
+
+        <View style={{ backgroundColor: colors.surface, borderColor: colors.border }} className="p-6 rounded-[32px] border shadow-sm">
+          <Text style={{ color: colors.textMuted }} className="text-[10px] font-black uppercase tracking-widest ml-1 mb-3">Mode of Transport</Text>
+          <View className="flex-row flex-wrap">
+            {TRANSPORT_OPTIONS.map((option) => {
+              const selected = transportMode === option.key;
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  onPress={() => setTransportMode(option.key)}
+                  className={`px-4 py-2 rounded-full mr-2 mb-2 border ${selected ? 'border-blue-600' : 'border-slate-200'}`}
+                  style={{ backgroundColor: selected ? '#dbeafe' : colors.background }}
+                >
+                  <Text className={`text-xs font-black ${selected ? 'text-blue-700' : 'text-slate-600'}`}>{option.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
         <View style={{ backgroundColor: colors.surface, borderColor: colors.border }} className="p-6 rounded-[32px] border shadow-sm">
@@ -311,12 +376,23 @@ export default function RoutePlannerScreen({ navigation }) {
           </Marker>
         )}
         {allRoutes[selectedRouteIndex] && (
-          <Polyline 
-            coordinates={allRoutes[selectedRouteIndex].coordinates} 
-            strokeColor={theme.primary} 
-            strokeWidth={6} 
+          <Polyline
+            coordinates={allRoutes[selectedRouteIndex].coordinates}
+            strokeColor="#33415566"
+            strokeWidth={4}
           />
         )}
+
+        {Array.isArray(routeScoresById?.[allRoutes[selectedRouteIndex]?.id]?.segments) &&
+          routeScoresById[allRoutes[selectedRouteIndex].id].segments.map((segment) => (
+            <Polyline
+              key={`${allRoutes[selectedRouteIndex].id}-${segment.segment_id}`}
+              coordinates={[segment.start, segment.end]}
+              strokeColor={getSegmentColorBySafety(segment.safety_score)}
+              strokeWidth={7}
+              zIndex={20}
+            />
+          ))}
       </MapView>
 
       {/* Header Overlay */}
@@ -367,9 +443,10 @@ export default function RoutePlannerScreen({ navigation }) {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} className="gap-x-4 mb-4">
           {allRoutes.map((r, idx) => {
             const scored = routeScoresById[r.id];
-            const score = scored?.safety_score ?? Math.max(35, 88 - (idx * 7));
-            const label = scored?.safety_label || (score >= 80 ? 'Safe' : score >= 60 ? 'Moderate' : 'Risky');
+            const score = Number(scored?.safety_score ?? 0);
+            const label = scored?.safety_label || 'Calculating';
             const scoreColors = getScoreColor(score);
+            const modeLabel = getTransportModeLabel(r.transportMode || transportMode);
 
             return (
               <TouchableOpacity 
@@ -394,6 +471,9 @@ export default function RoutePlannerScreen({ navigation }) {
                   <View style={{ backgroundColor: scoreColors.labelBg }} className="px-2 py-1 rounded-md">
                     <Text style={{ color: scoreColors.labelText }} className="text-[10px] font-black uppercase">{label}</Text>
                   </View>
+                  <View className={`ml-2 px-2 py-1 rounded-md ${idx === selectedRouteIndex ? 'bg-white/20' : 'bg-slate-100'}`}>
+                    <Text className={`text-[10px] font-black uppercase ${idx === selectedRouteIndex ? 'text-white' : 'text-slate-600'}`}>{modeLabel}</Text>
+                  </View>
                   <Text className={`ml-2 text-[10px] font-bold ${idx === selectedRouteIndex ? 'text-white/90' : 'text-slate-500'}`}>
                     Safety Score
                   </Text>
@@ -402,7 +482,7 @@ export default function RoutePlannerScreen({ navigation }) {
                 <Text className={`font-bold mb-4 opacity-70 ${idx === selectedRouteIndex ? 'text-white' : ''}`} style={{ color: idx === selectedRouteIndex ? 'white' : colors.textMuted }}>
                   {Math.ceil(r.durationSeconds / 60)} min • {(r.distanceMeters / 1000).toFixed(1)} km
                 </Text>
-                
+
                 {idx === selectedRouteIndex && (
                   <TouchableOpacity 
                     className="bg-white py-4 rounded-2xl items-center shadow-md shadow-black/20"
@@ -412,6 +492,7 @@ export default function RoutePlannerScreen({ navigation }) {
                       allRoutes,
                       scoredRoutes: routeScoresById,
                       scoreUpdatedAt: lastScoreUpdateAt,
+                      transportMode,
                     })}
                   >
                     <Text style={{ color: theme.primary }} className="font-black uppercase tracking-widest text-xs">Start Navigation</Text>

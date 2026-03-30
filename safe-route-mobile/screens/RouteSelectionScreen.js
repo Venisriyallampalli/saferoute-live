@@ -3,8 +3,21 @@ import { View, Text, TouchableOpacity, TextInput, ScrollView, ActivityIndicator,
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, ChevronDown, Shield, Info, MapPin, Navigation, ArrowLeft, CheckCircle2, ShieldCheck } from 'lucide-react-native';
 import * as Location from 'expo-location';
-import { fetchRoute, geocodeDestination, fetchPlaceSuggestions } from '../services/navigationService';
-import { scoreRoutesWithBackend, getScoreColor } from '../services/routeSafetyService';
+import { TRANSPORT_MODES, fetchRoute, geocodeDestination, fetchPlaceSuggestions } from '../services/navigationService';
+import { scoreRoutesWithBackend, getScoreColor, getDynamicRescoreKey } from '../services/routeSafetyService';
+
+const TRANSPORT_OPTIONS = [
+  { key: TRANSPORT_MODES.HEAVY, label: 'Truck/Bus/Lorry' },
+  { key: TRANSPORT_MODES.CAR, label: 'Car' },
+  { key: TRANSPORT_MODES.BIKE, label: 'Bike' },
+  { key: TRANSPORT_MODES.CYCLE, label: 'Cycle' },
+  { key: TRANSPORT_MODES.WALK, label: 'Walk' },
+];
+];
+function getTransportModeLabel(mode) {
+  const found = TRANSPORT_OPTIONS.find((item) => item.key === mode);
+  return found?.label || 'Car';
+}
 
 export default function RouteSelectionScreen({ navigation }) {
   const [sourceInput, setSourceInput] = useState('My Location');
@@ -15,6 +28,7 @@ export default function RouteSelectionScreen({ navigation }) {
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [isRouting, setIsRouting] = useState(false);
   const [safetyPreference, setSafetyPreference] = useState('Well-lit');
+  const [transportMode, setTransportMode] = useState(TRANSPORT_MODES.CAR);
   const [showPreferences, setShowPreferences] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [activeInput, setActiveInput] = useState(null);
@@ -22,6 +36,7 @@ export default function RouteSelectionScreen({ navigation }) {
   const [origin, setOrigin] = useState(null);
   const [routeScoresById, setRouteScoresById] = useState({});
   const [isScoringRoutes, setIsScoringRoutes] = useState(false);
+  const [lastScoreUpdateAt, setLastScoreUpdateAt] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -41,21 +56,40 @@ export default function RouteSelectionScreen({ navigation }) {
   useEffect(() => {
     if (allRoutes.length === 0) return undefined;
 
-    const intervalId = setInterval(async () => {
+    let previousKey = '';
+    const refreshIfNeeded = async () => {
       try {
+        const dynamicKey = await getDynamicRescoreKey();
+        const changed = dynamicKey !== previousKey;
+        const lastUpdatedAt = lastScoreUpdateAt ? new Date(lastScoreUpdateAt).getTime() : 0;
+        const staleForMs = Date.now() - lastUpdatedAt;
+
+        if (!changed && lastUpdatedAt && staleForMs < 120000) {
+          return;
+        }
+
+        previousKey = dynamicKey;
+
         const scored = await scoreRoutesWithBackend(allRoutes);
         const mapped = {};
         scored.forEach((item) => {
           mapped[item.route_id] = item;
         });
         setRouteScoresById(mapped);
+        setLastScoreUpdateAt(new Date().toISOString());
       } catch (error) {
         console.warn('Periodic route safety update failed', error);
       }
-    }, 120000);
+    };
+
+    refreshIfNeeded();
+
+    const intervalId = setInterval(() => {
+      refreshIfNeeded();
+    }, 30000);
 
     return () => clearInterval(intervalId);
-  }, [allRoutes]);
+  }, [allRoutes, lastScoreUpdateAt]);
 
   const handleInputChange = (text, type) => {
     if (type === 'source') setSourceInput(text);
@@ -68,7 +102,8 @@ export default function RouteSelectionScreen({ navigation }) {
     if (text.length > 2) {
       const timer = setTimeout(async () => {
         try {
-          const results = await fetchPlaceSuggestions(text);
+          const anchor = type === 'source' ? (source || origin) : (source || origin);
+          const results = await fetchPlaceSuggestions(text, anchor);
           setSuggestions(results);
         } catch (error) {
           console.error('Suggestions error:', error);
@@ -81,14 +116,33 @@ export default function RouteSelectionScreen({ navigation }) {
   };
 
   const selectSuggestion = async (item) => {
+    const selectedName = item.placeName || item.description || item.mainText;
+    const hasCoords = Number.isFinite(Number(item.latitude)) && Number.isFinite(Number(item.longitude));
+
     if (activeInput === 'source') {
-      setSourceInput(item.mainText);
-      const coords = await geocodeDestination(item.placeName || item.mainText);
-      if (coords) setSource(coords);
+      setSourceInput(selectedName);
+      if (hasCoords) {
+        setSource({
+          latitude: Number(item.latitude),
+          longitude: Number(item.longitude),
+          placeName: selectedName,
+        });
+      } else {
+        const coords = await geocodeDestination(selectedName);
+        if (coords) setSource(coords);
+      }
     } else {
-      setDestinationInput(item.mainText);
-      const coords = await geocodeDestination(item.placeName || item.mainText);
-      if (coords) setDestination(coords);
+      setDestinationInput(selectedName);
+      if (hasCoords) {
+        setDestination({
+          latitude: Number(item.latitude),
+          longitude: Number(item.longitude),
+          placeName: selectedName,
+        });
+      } else {
+        const coords = await geocodeDestination(selectedName);
+        if (coords) setDestination(coords);
+      }
     }
     setSuggestions([]);
     setActiveInput(null);
@@ -104,7 +158,7 @@ export default function RouteSelectionScreen({ navigation }) {
 
     setIsRouting(true);
     try {
-      const routes = await fetchRoute(startPoint, destination);
+      const routes = await fetchRoute(startPoint, destination, transportMode);
       if (routes && routes.length > 0) {
         setAllRoutes(routes);
         setIsScoringRoutes(true);
@@ -115,6 +169,7 @@ export default function RouteSelectionScreen({ navigation }) {
           mapped[item.route_id] = item;
         });
         setRouteScoresById(mapped);
+        setLastScoreUpdateAt(new Date().toISOString());
       } else {
         Alert.alert('No Route Found', 'Could not find a path between these locations.');
       }
@@ -202,6 +257,24 @@ export default function RouteSelectionScreen({ navigation }) {
               )}
             </View>
 
+            <View>
+              <Text className="text-slate-500 text-[10px] font-bold uppercase ml-1 mb-1">Mode of Transport</Text>
+              <View className="flex-row flex-wrap bg-slate-50 border border-slate-100 rounded-2xl px-3 py-3">
+                {TRANSPORT_OPTIONS.map((option) => {
+                  const selected = transportMode === option.key;
+                  return (
+                    <TouchableOpacity
+                      key={option.key}
+                      onPress={() => setTransportMode(option.key)}
+                      className={`px-3 py-2 rounded-full mr-2 mb-2 border ${selected ? 'border-blue-600 bg-blue-100' : 'border-slate-200 bg-white'}`}
+                    >
+                      <Text className={`text-[11px] font-bold ${selected ? 'text-blue-700' : 'text-slate-600'}`}>{option.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
             <TouchableOpacity
               className={`bg-blue-600 h-14 rounded-2xl items-center justify-center shadow-lg shadow-blue-200 mt-2 ${isRouting ? 'opacity-50' : ''}`}
               onPress={handleBuildRoute}
@@ -219,9 +292,10 @@ export default function RouteSelectionScreen({ navigation }) {
               )}
               {allRoutes.map((r, idx) => {
                 const scored = routeScoresById[r.id];
-                const score = scored?.safety_score ?? Math.max(35, 88 - (idx * 7));
-                const label = scored?.safety_label || (score >= 80 ? 'Safe' : score >= 60 ? 'Moderate' : 'Risky');
+                const score = Number(scored?.safety_score ?? 0);
+                const label = scored?.safety_label || 'Calculating';
                 const scoreColors = getScoreColor(score);
+                const modeLabel = getTransportModeLabel(r.transportMode || transportMode);
 
                 return (
                   <TouchableOpacity
@@ -237,6 +311,9 @@ export default function RouteSelectionScreen({ navigation }) {
                           </Text>
                           <View className="ml-2 px-2 py-0.5 rounded-md" style={{ backgroundColor: scoreColors.labelBg }}>
                              <Text className="text-[10px] font-black uppercase" style={{ color: scoreColors.labelText }}>{label}</Text>
+                          </View>
+                          <View className="ml-2 px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200">
+                            <Text className="text-[10px] font-black uppercase text-slate-600">{modeLabel}</Text>
                           </View>
                         </View>
                         <Text className="text-slate-500 text-xs font-bold">
@@ -268,6 +345,7 @@ export default function RouteSelectionScreen({ navigation }) {
                             destination: destination,
                             safetyPreference: safetyPreference,
                             routeSafety: scored || null,
+                            transportMode,
                           })}
                         >
                           <Text className="text-white font-black text-sm uppercase">Start Navigation</Text>

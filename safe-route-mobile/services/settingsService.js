@@ -7,6 +7,7 @@ const defaultSettings = {
   highRiskAlerts: true,
   autoSosEnabled: true,
   shareLiveLocationByDefault: true,
+  autoSmsShareToTrustedContacts: false,
   profile: {
     displayName: '',
     phone: '',

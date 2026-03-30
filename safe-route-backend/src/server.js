@@ -9,6 +9,8 @@ const rateLimit = require('express-rate-limit');
 const { connectDatabase } = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const safetyRoutes = require('./routes/safetyRoutes');
+const contactsRoutes = require('./routes/contactsRoutes');
+const { getLiveFusionStats } = require('./utils/tomtomTrafficService');
 
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +42,7 @@ app.get('/health', (_req, res) => {
 // Register Core APIs
 app.use('/api/auth', authRoutes);
 app.use('/api/safety', safetyRoutes);
+app.use('/api/contacts', contactsRoutes);
 
 // Real-time Socket interactions
 io.on('connection', (socket) => {
@@ -59,14 +62,18 @@ io.on('connection', (socket) => {
 
 // Background "Heartbeat" for Live Fusion Dashboard Score
 setInterval(() => {
-   const updatedFusion = {
-      crowdDensity: 40 + Math.floor(Math.random() * 25),
-      trafficFlow: 45 + Math.floor(Math.random() * 30),
-      timestamp: new Date().toISOString()
-   };
-   
-   io.emit('fusion_stats_update', updatedFusion);
-   // console.log('Broadcasting live fusion update to all mobile clients.');
+   getLiveFusionStats()
+     .then((updatedFusion) => {
+       io.emit('fusion_stats_update', updatedFusion);
+     })
+     .catch(() => {
+       io.emit('fusion_stats_update', {
+         crowdDensity: 50,
+         trafficFlow: 60,
+         status: 'fallback',
+         timestamp: new Date().toISOString(),
+       });
+     });
 }, 60000); // Pulse every 60 seconds
 
 async function start() {

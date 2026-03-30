@@ -14,6 +14,7 @@ import { MAPBOX_TOKEN } from '../utils/config';
 import { calculateSafetyScore, getSafetyLabel } from '../utils/safetyScore';
 import { fetchRoute, geocodeDestination, getMockSafetyMarkers, fetchPlaceSuggestions } from '../services/navigationService';
 import { loadHazardReports } from '../services/hazardService';
+import { scoreRoutesWithBackend, getDynamicRescoreKey, getSegmentColorBySafety } from '../services/routeSafetyService';
 import { useAuth } from '../context/AuthContext';
 import { createSosPayload, sendSosAlert } from '../services/sosService';
 import { loadContacts } from '../services/contactsService';
@@ -34,6 +35,10 @@ export default function MapScreen({ route, navigation }) {
   const [destination, setDestination] = useState(null);
   const [allRoutes, setAllRoutes] = useState([]);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+  const [routeScoresById, setRouteScoresById] = useState({});
+  const [isScoringRoutes, setIsScoringRoutes] = useState(false);
+  const [isRerouting, setIsRerouting] = useState(false);
+  const [lastScoreUpdateAt, setLastScoreUpdateAt] = useState(null);
   const [isLoadingMap, setIsLoadingMap] = useState(true);
   const [isRouting, setIsRouting] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -59,6 +64,108 @@ export default function MapScreen({ route, navigation }) {
   const [source, setSource] = useState(null);
   const [showOptions, setShowOptions] = useState(false);
   const [formCollapsed, setFormCollapsed] = useState(false);
+  const [transportMode, setTransportMode] = useState('car');
+  const lastDynamicKeyRef = useRef('');
+  const lastRerouteAtRef = useRef(0);
+
+  const getTransportModeLabel = (mode) => {
+    const normalized = String(mode || '').toLowerCase();
+    if (normalized === 'heavy') return 'Truck/Bus/Lorry';
+    if (normalized === 'bike') return 'Bike';
+    if (normalized === 'cycle') return 'Cycle';
+    if (normalized === 'walk') return 'Walk';
+    return 'Car';
+  };
+
+  const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
+
+  const estimateRouteTrafficBase = (routeItem) => {
+    if (routeItem?.trafficDensity != null) return clamp01(routeItem.trafficDensity);
+
+    const speedMps = routeItem?.durationSeconds > 0
+      ? (routeItem.distanceMeters || 0) / routeItem.durationSeconds
+      : 8;
+
+    if (speedMps >= 16) return 0.35;
+    if (speedMps >= 11) return 0.5;
+    if (speedMps >= 7) return 0.62;
+    return 0.75;
+  };
+
+  const averageUpcomingTraffic = (segments = [], routeItem = null, fromIndex = 0, lookahead = 4) => {
+    const window = segments.slice(fromIndex, fromIndex + lookahead);
+    if (!window.length) {
+      return estimateRouteTrafficBase(routeItem);
+    }
+
+    const total = window.reduce((sum, segment) => {
+      const segmentTraffic = segment?.factors?.traffic;
+      if (segmentTraffic == null) {
+        return sum + estimateRouteTrafficBase(routeItem);
+      }
+      return sum + clamp01(segmentTraffic);
+    }, 0);
+
+    return clamp01(total / window.length);
+  };
+
+  const getNearestSegmentIndex = (position, segments = []) => {
+    if (!position || !segments.length) return 0;
+
+    let nearestIndex = 0;
+    let nearestDistance = Infinity;
+
+    for (let i = 0; i < segments.length; i += 1) {
+      const midpoint = segments[i]?.midpoint;
+      if (!midpoint) continue;
+
+      const latDiff = midpoint.latitude - position.latitude;
+      const lonDiff = midpoint.longitude - position.longitude;
+      const distanceSq = (latDiff * latDiff) + (lonDiff * lonDiff);
+
+      if (distanceSq < nearestDistance) {
+        nearestDistance = distanceSq;
+        nearestIndex = i;
+      }
+    }
+
+    return nearestIndex;
+  };
+
+  const averageUpcomingSafety = (segments = [], fromIndex = 0, lookahead = 4) => {
+    const window = segments.slice(fromIndex, fromIndex + lookahead);
+    if (!window.length) return 100;
+
+    const total = window.reduce((sum, segment) => sum + Number(segment?.safety_score || 0), 0);
+    return total / window.length;
+  };
+
+  const refreshRouteScores = async (routes, options = {}) => {
+    if (!Array.isArray(routes) || !routes.length) {
+      setRouteScoresById({});
+      return;
+    }
+
+    if (!options.silent) {
+      setIsScoringRoutes(true);
+    }
+
+    try {
+      const scored = await scoreRoutesWithBackend(routes, { now: options.now });
+      const scoreMap = {};
+      scored.forEach((item) => {
+        scoreMap[item.route_id] = item;
+      });
+      setRouteScoresById(scoreMap);
+      setLastScoreUpdateAt(new Date().toISOString());
+    } catch (error) {
+      console.warn('Map route scoring refresh failed', error);
+    } finally {
+      if (!options.silent) {
+        setIsScoringRoutes(false);
+      }
+    }
+  };
 
   useEffect(() => {
     let watcher;
@@ -138,13 +245,28 @@ export default function MapScreen({ route, navigation }) {
 
   useEffect(() => {
     if (route?.params?.initialRoute) {
-      const { initialRoute, allRoutes: incomingRoutes, selectedIndex, source: incSource, destination: incDest, safetyPreference: incPref } = route.params;
+      const {
+        initialRoute,
+        allRoutes: incomingRoutes,
+        selectedIndex,
+        source: incSource,
+        destination: incDest,
+        safetyPreference: incPref,
+        scoredRoutes,
+        transportMode: incTransportMode,
+      } = route.params;
       
       setAllRoutes(incomingRoutes || [initialRoute]);
       setSelectedRouteIndex(selectedIndex || 0);
       setSource(incSource);
       setDestination(incDest);
       setSafetyPreference(incPref || 'Well-lit');
+      setTransportMode(incTransportMode || initialRoute?.transportMode || 'car');
+
+      if (scoredRoutes && typeof scoredRoutes === 'object') {
+        setRouteScoresById(scoredRoutes);
+      }
+
       setIsNavigating(true);
       setFormCollapsed(true);
       setShowOptions(false);
@@ -155,6 +277,131 @@ export default function MapScreen({ route, navigation }) {
       }, 1500);
     }
   }, [route?.params]);
+
+  useEffect(() => {
+    if (!allRoutes.length) return undefined;
+
+    const refreshIfNeeded = async () => {
+      const dynamicKey = await getDynamicRescoreKey();
+      const changed = dynamicKey !== lastDynamicKeyRef.current;
+      const lastUpdatedAt = lastScoreUpdateAt ? new Date(lastScoreUpdateAt).getTime() : 0;
+      const staleForMs = Date.now() - lastUpdatedAt;
+
+      if (changed || !lastUpdatedAt || staleForMs >= 120000) {
+        lastDynamicKeyRef.current = dynamicKey;
+        await refreshRouteScores(allRoutes, { silent: true });
+      }
+    };
+
+    refreshIfNeeded();
+
+    const intervalId = setInterval(() => {
+      refreshIfNeeded();
+    }, 30000);
+
+    return () => clearInterval(intervalId);
+  }, [allRoutes, lastScoreUpdateAt]);
+
+  useEffect(() => {
+    if (!isNavigating || !origin || !allRoutes.length || isRerouting) {
+      return;
+    }
+
+    const activeRoute = allRoutes[selectedRouteIndex];
+    const activeScore = routeScoresById[activeRoute?.id];
+    const activeSegments = activeScore?.segments || [];
+
+    if (activeSegments.length < 3) {
+      return;
+    }
+
+    const activeCurrentSegmentIndex = getNearestSegmentIndex(origin, activeSegments);
+    const upcomingSafety = averageUpcomingSafety(activeSegments, activeCurrentSegmentIndex + 1, 4);
+
+    if (upcomingSafety >= 58) {
+      return;
+    }
+
+    const nowTs = Date.now();
+    if (nowTs - lastRerouteAtRef.current < 120000) {
+      return;
+    }
+
+    const activeUpcomingTraffic = averageUpcomingTraffic(
+      activeSegments,
+      activeRoute,
+      activeCurrentSegmentIndex + 1,
+      4
+    );
+    const activeRouteScore = Number(activeScore?.safety_score || 0);
+
+    let bestAlternative = null;
+
+    allRoutes.forEach((candidateRoute, idx) => {
+      if (idx === selectedRouteIndex) return;
+
+      const candidateScore = routeScoresById[candidateRoute.id];
+      const candidateSegments = candidateScore?.segments || [];
+      if (candidateSegments.length < 3) return;
+
+      const candidateCurrentSegmentIndex = getNearestSegmentIndex(origin, candidateSegments);
+      const candidateUpcoming = averageUpcomingSafety(candidateSegments, candidateCurrentSegmentIndex + 1, 4);
+      const candidateUpcomingTraffic = averageUpcomingTraffic(
+        candidateSegments,
+        candidateRoute,
+        candidateCurrentSegmentIndex + 1,
+        4
+      );
+      const candidateRouteScore = Number(candidateScore?.safety_score || 0);
+
+      const saferUpcoming = candidateUpcoming >= upcomingSafety + 12;
+      const saferOverall = candidateRouteScore >= activeRouteScore + 6;
+      const congestionAcceptable =
+        candidateUpcomingTraffic <= (activeUpcomingTraffic + 0.08) &&
+        candidateUpcomingTraffic <= 0.8;
+
+      if (!saferUpcoming || !saferOverall || !congestionAcceptable) {
+        return;
+      }
+
+      if (!bestAlternative || candidateRouteScore > bestAlternative.routeScore) {
+        bestAlternative = {
+          index: idx,
+          routeScore: candidateRouteScore,
+        };
+      }
+    });
+
+    if (!bestAlternative) {
+      return;
+    }
+
+    setIsRerouting(true);
+    setSelectedRouteIndex(bestAlternative.index);
+    lastRerouteAtRef.current = Date.now();
+
+    const nextRoute = allRoutes[bestAlternative.index];
+    if (nextRoute?.coordinates?.length && mapRef.current) {
+      mapRef.current.fitToCoordinates(nextRoute.coordinates, {
+        edgePadding: { top: 120, right: 60, bottom: 180, left: 60 },
+        animated: true,
+      });
+    }
+
+    Alert.alert('Safer reroute applied', 'Upcoming segments looked unsafe. Switched to a safer alternative with similar traffic load.');
+
+    const timer = setTimeout(() => {
+      setIsRerouting(false);
+      clearTimeout(timer);
+    }, 2000);
+  }, [
+    isNavigating,
+    origin,
+    allRoutes,
+    selectedRouteIndex,
+    routeScoresById,
+    isRerouting,
+  ]);
 
   const safetyScore = useMemo(() => {
     return calculateSafetyScore({
@@ -199,6 +446,10 @@ export default function MapScreen({ route, navigation }) {
   };
 
   const activeRoute = useMemo(() => allRoutes[selectedRouteIndex] || null, [allRoutes, selectedRouteIndex]);
+  const activeTransportModeLabel = useMemo(
+    () => getTransportModeLabel(activeRoute?.transportMode || transportMode),
+    [activeRoute, transportMode]
+  );
 
   const handleToggleNavigation = () => {
     if (!activeRoute) {
@@ -350,18 +601,29 @@ export default function MapScreen({ route, navigation }) {
           </Marker>
         )}
 
-        {/* Render all routes but highlight selected one */}
+        {/* Render all routes with selected base and colored segment overlays */}
         {allRoutes.map((r, idx) => (
           <Polyline
             key={r.id}
             coordinates={r.coordinates}
-            strokeColor={idx === selectedRouteIndex ? '#2563eb' : '#94a3b880'}
-            strokeWidth={idx === selectedRouteIndex ? 6 : 4}
+            strokeColor={idx === selectedRouteIndex ? '#33415566' : '#94a3b880'}
+            strokeWidth={idx === selectedRouteIndex ? 4 : 4}
             zIndex={idx === selectedRouteIndex ? 10 : 1}
             onPress={() => setSelectedRouteIndex(idx)}
             tappable
           />
         ))}
+
+        {Array.isArray(routeScoresById?.[allRoutes[selectedRouteIndex]?.id]?.segments) &&
+          routeScoresById[allRoutes[selectedRouteIndex].id].segments.map((segment) => (
+            <Polyline
+              key={`${allRoutes[selectedRouteIndex].id}-${segment.segment_id}`}
+              coordinates={[segment.start, segment.end]}
+              strokeColor={getSegmentColorBySafety(segment.safety_score)}
+              strokeWidth={7}
+              zIndex={30}
+            />
+          ))}
 
         {markers.hazards.map((hazard) => {
           const isDangerous = ['harassment', 'unsafe', 'accident'].includes(hazard.type);
@@ -438,6 +700,9 @@ export default function MapScreen({ route, navigation }) {
                   <View className="bg-yellow-500 px-1.5 py-0.5 rounded-md mt-1 w-12 items-center">
                     <Text className="text-black font-black text-xs">65</Text>
                   </View>
+                  <View className="bg-white/20 px-2 py-0.5 rounded-md mt-2 self-start">
+                    <Text className="text-white text-[10px] font-black uppercase">{activeTransportModeLabel}</Text>
+                  </View>
                </View>
             </View>
             <View className="w-12 h-12 bg-white rounded-full items-center justify-center shadow-lg">
@@ -505,34 +770,79 @@ export default function MapScreen({ route, navigation }) {
           </TouchableOpacity>
 
           {/* Direct SOS from Nav */}
-          <TouchableOpacity 
-            className="w-14 h-14 bg-red-600 rounded-full items-center justify-center shadow-2xl border border-white/20"
-            onPress={() => navigation.navigate('Sos')}
-          >
-            <TriangleAlert size={26} color="white" />
-          </TouchableOpacity>
+          <View className="flex-row items-center justify-end">
+            <View style={{ backgroundColor: colors.surface }} className="px-2.5 py-1 rounded-full mr-2 border border-white/15">
+              <Text style={{ color: colors.text }} className="text-[10px] font-black uppercase tracking-wide">SOS</Text>
+            </View>
+            <TouchableOpacity 
+              className="w-14 h-14 bg-red-600 rounded-full items-center justify-center shadow-2xl border border-white/20"
+              onPress={() => navigation.navigate('Sos')}
+            >
+              <TriangleAlert size={26} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Share Live Location */}
+          <View className="flex-row items-center justify-end">
+            <View style={{ backgroundColor: colors.surface }} className="px-2.5 py-1 rounded-full mr-2 border border-white/15">
+              <Text style={{ color: colors.text }} className="text-[10px] font-black uppercase tracking-wide">Share Live</Text>
+            </View>
+            <TouchableOpacity
+              style={{ backgroundColor: colors.surface }}
+              className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/20"
+              onPress={() => navigation.navigate('ShareLive')}
+            >
+              <Share2 size={22} color="#6366f1" />
+            </TouchableOpacity>
+          </View>
           
           {/* Hazard Report */}
-          <TouchableOpacity 
-            style={{ backgroundColor: colors.surface }} 
-            className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/20"
-            onPress={() => navigation.navigate('HazardReport')}
-          >
-            <AlertTriangle size={24} color="#f59e0b" />
-          </TouchableOpacity>
+          <View className="flex-row items-center justify-end">
+            <View style={{ backgroundColor: colors.surface }} className="px-2.5 py-1 rounded-full mr-2 border border-white/15">
+              <Text style={{ color: colors.text }} className="text-[10px] font-black uppercase tracking-wide">Hazard</Text>
+            </View>
+            <TouchableOpacity 
+              style={{ backgroundColor: colors.surface }} 
+              className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/20"
+              onPress={() => navigation.navigate('HazardReport')}
+            >
+              <AlertTriangle size={24} color="#f59e0b" />
+            </TouchableOpacity>
+          </View>
+
           {/* Chat Link */}
-          <TouchableOpacity 
-            style={{ backgroundColor: colors.surface }} 
-            className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/10"
-            onPress={() => navigation.navigate('SafetyChat')}
-          >
-            <MessageSquare size={24} color="#10b981" />
-          </TouchableOpacity>
+          <View className="flex-row items-center justify-end">
+            <View style={{ backgroundColor: colors.surface }} className="px-2.5 py-1 rounded-full mr-2 border border-white/15">
+              <Text style={{ color: colors.text }} className="text-[10px] font-black uppercase tracking-wide">Chat</Text>
+            </View>
+            <TouchableOpacity 
+              style={{ backgroundColor: colors.surface }} 
+              className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/10"
+              onPress={() => navigation.navigate('SafetyChat')}
+            >
+              <MessageSquare size={24} color="#10b981" />
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
       {/* TRIP DASHBOARD PANEL (Redesigned) */}
       <View style={{ zIndex: 100 }} className="absolute bottom-10 left-6 right-6">
+          {(isScoringRoutes || isRerouting) && (
+            <View className="mb-3 self-start flex-row">
+              {isScoringRoutes && (
+                <View className="bg-white/95 rounded-full px-4 py-2 border border-slate-200 mr-2">
+                  <Text className="text-slate-700 text-[10px] font-black uppercase tracking-wide">Refreshing segment safety...</Text>
+                </View>
+              )}
+              {isRerouting && (
+                <View className="bg-emerald-50 rounded-full px-4 py-2 border border-emerald-200">
+                  <Text className="text-emerald-700 text-[10px] font-black uppercase tracking-wide">Rerouting to safer segment path</Text>
+                </View>
+              )}
+            </View>
+          )}
+
           {isNavigating && activeRoute && (
             <View style={{ backgroundColor: colors.surface }} className="rounded-[40px] p-8 shadow-2xl border border-white/5">
                {/* Metadata Row */}

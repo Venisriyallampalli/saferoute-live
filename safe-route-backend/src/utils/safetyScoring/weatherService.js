@@ -2,7 +2,15 @@ const { clamp01 } = require('./helpers');
 
 async function fetchWeatherSnapshot({ latitude, longitude, apiKey }) {
   if (!apiKey) {
-    throw new Error('WEATHER_API_KEY is required for safety scoring');
+    return {
+      rainVolume: 0,
+      visibilityMeters: 10000,
+      temperatureCelsius: 24,
+      condition: 'clear',
+      rawCondition: 'Clear',
+      description: 'fallback-clear',
+      fallback: true,
+    };
   }
 
   const params = new URLSearchParams({
@@ -32,11 +40,11 @@ async function fetchWeatherSnapshot({ latitude, longitude, apiKey }) {
 }
 
 function convertWeatherToRisk(snapshot) {
-  let risk = 0;
+  let risk = 0.3;
   const condition = (snapshot.condition || '').toLowerCase();
 
   if (condition.includes('rain') || snapshot.rainVolume > 0) {
-    risk += 0.3;
+    risk = Math.max(risk, 0.7);
   }
 
   if (
@@ -45,11 +53,11 @@ function convertWeatherToRisk(snapshot) {
     condition.includes('haze') ||
     condition.includes('smoke')
   ) {
-    risk += 0.4;
+    risk = Math.max(risk, 0.8);
   }
 
   if (condition.includes('clear')) {
-    risk += 0;
+    risk = Math.min(risk, 0.2);
   }
 
   if (snapshot.visibilityMeters < 1000) {

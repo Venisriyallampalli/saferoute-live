@@ -60,8 +60,8 @@ export default function HomeScreen({ navigation }) {
               <Share2 size={28} color={theme.primary} />
             </View>
             <View className="ml-5 flex-1">
-              <Text style={{ color: colors.text }} className="text-xl font-black">Share Live Location</Text>
-              <Text style={{ color: colors.textMuted }} className="text-xs font-bold mt-0.5">Let your loved ones know you're safe</Text>
+              <Text style={{ color: colors.text }} className="text-xl font-black">Emergency Contacts</Text>
+              <Text style={{ color: colors.textMuted }} className="text-xs font-bold mt-0.5">Add and manage trusted contacts</Text>
             </View>
             <ArrowRight size={20} color={colors.textMuted} />
           </TouchableOpacity>

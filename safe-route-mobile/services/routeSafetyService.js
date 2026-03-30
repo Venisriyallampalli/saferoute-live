@@ -1,24 +1,40 @@
 import { apiRequestWithFallback } from './apiClient';
 import { WEATHER_API_KEY } from '../utils/config';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { computeRouteSafetyLocally as computeOneRouteSafetyLocally, computeRoutesSafetyLocally } from './safetyEngine';
+import { HAZARD_LAST_UPDATED_KEY } from '../utils/storageKeys';
 
-function fallbackScoreByIndex(index) {
-  return Math.max(35, 88 - (index * 7));
+function withTimeout(promise, timeoutMs = 15000) {
+  let timer = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Route scoring timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
-function scoreToLabel(score) {
-  if (score >= 80) return 'Safe';
-  if (score >= 60) return 'Moderate';
-  if (score >= 40) return 'Risky';
-  return 'High Risk';
+export function getTimeBucket(now = new Date()) {
+  const date = now instanceof Date ? now : new Date(now);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+}
+
+export async function getDynamicRescoreKey() {
+  const hazardUpdatedAt = (await AsyncStorage.getItem(HAZARD_LAST_UPDATED_KEY)) || 'none';
+  return `${getTimeBucket()}|${hazardUpdatedAt}`;
 }
 
 export async function scoreRoutesWithBackend(routes, options = {}) {
-  const payloadRoutes = (routes || []).map((route) => ({
-    route_id: route.id,
+  const payloadRoutes = (routes || []).map((route, index) => ({
+    route_id: route.id || route.route_id || `route-${index}`,
     coordinates: route.coordinates,
     distanceMeters: route.distanceMeters,
     durationSeconds: route.durationSeconds,
     trafficDensity: route.trafficDensity,
+    transport_mode: route.transport_mode || route.transportMode || options.transportMode || 'car',
   }));
 
   if (!payloadRoutes.length) {
@@ -34,34 +50,60 @@ export async function scoreRoutesWithBackend(routes, options = {}) {
     requestBody.weather_api_key = WEATHER_API_KEY;
   }
 
-  const fallback = {
-    routes: payloadRoutes.map((route, idx) => {
-      const score = fallbackScoreByIndex(idx);
+  try {
+    const response = await withTimeout(
+      apiRequestWithFallback('/api/safety/route-score', {
+        method: 'POST',
+        body: JSON.stringify(requestBody),
+      }),
+      options.timeoutMs || 15000
+    );
+
+    if (Array.isArray(response?.routes) && response.routes.length) {
+      return response.routes;
+    }
+  } catch (error) {
+    // Fall through to local segment-wise scoring simulation.
+  }
+
+  try {
+    return await computeRoutesSafetyLocally(payloadRoutes, {
+      segmentLengthMeters: options.segmentLengthMeters || 75,
+      weatherApiKey: WEATHER_API_KEY,
+      now: options.now,
+      fastLocal: true,
+      transportMode: options.transportMode,
+    });
+  } catch (error) {
+    return payloadRoutes.map((route, index) => {
+      const base = Math.max(45, 82 - (index * 7));
       return {
         route_id: route.route_id,
-        safety_score: score,
-        safety_label: scoreToLabel(score),
+        safety_score: base,
+        safety_label: base >= 80 ? 'Safe' : base >= 60 ? 'Moderate' : base >= 40 ? 'Risky' : 'High Risk',
+        transport_mode: route.transport_mode || 'car',
         factors: {
-          crime: 0.5,
-          accident: 0.45,
+          crime: 0.45,
           weather: 0.3,
-          traffic: 0.5,
+          traffic: 0.45,
           hazard: 0.2,
+          lighting: 0.35,
+          time: 0.35,
+          transport_adjustment: 0,
         },
+        segment_count: 0,
+        segments: [],
       };
-    }),
-  };
+    });
+  }
+}
 
-  const response = await apiRequestWithFallback(
-    '/api/safety/route-score',
-    {
-      method: 'POST',
-      body: JSON.stringify(requestBody),
-    },
-    fallback
-  );
-
-  return Array.isArray(response?.routes) ? response.routes : fallback.routes;
+export async function computeRouteSafetyLocally(route, options = {}) {
+  return computeOneRouteSafetyLocally(route, {
+    segmentLengthMeters: options.segmentLengthMeters || 75,
+    weatherApiKey: WEATHER_API_KEY,
+    now: options.now,
+  });
 }
 
 export function getScoreColor(score) {
@@ -89,4 +131,11 @@ export function getScoreColor(score) {
     labelBg: '#fee2e2',
     labelText: '#991b1b',
   };
+}
+
+export function getSegmentColorBySafety(segmentSafetyScore) {
+  const score = Number(segmentSafetyScore || 0);
+  if (score >= 80) return '#16a34a';
+  if (score >= 60) return '#eab308';
+  return '#dc2626';
 }

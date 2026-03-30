@@ -2,21 +2,23 @@ const {
   clamp,
   haversineDistanceMeters,
   interpolatePoint,
+  normalizeRouteCoordinates,
 } = require('./helpers');
 
 function segmentRoute(coordinates, preferredLengthMeters = 100) {
-  const normalizedLength = clamp(Number(preferredLengthMeters) || 100, 50, 200);
+  const normalizedLength = clamp(Number(preferredLengthMeters) || 100, 50, 100);
+  const normalizedCoordinates = normalizeRouteCoordinates(coordinates);
 
-  if (!Array.isArray(coordinates) || coordinates.length < 2) {
+  if (!Array.isArray(normalizedCoordinates) || normalizedCoordinates.length < 2) {
     return [];
   }
 
   const segments = [];
   let segmentIndex = 0;
 
-  for (let i = 0; i < coordinates.length - 1; i += 1) {
-    const start = coordinates[i];
-    const end = coordinates[i + 1];
+  for (let i = 0; i < normalizedCoordinates.length - 1; i += 1) {
+    const start = normalizedCoordinates[i];
+    const end = normalizedCoordinates[i + 1];
 
     const edgeDistance = haversineDistanceMeters(start, end);
     if (edgeDistance <= 0) {
@@ -33,6 +35,7 @@ function segmentRoute(coordinates, preferredLengthMeters = 100) {
       const midpoint = interpolatePoint(pointA, pointB, 0.5);
 
       segments.push({
+        segment_id: `seg-${segmentIndex}`,
         index: segmentIndex,
         start: pointA,
         end: pointB,

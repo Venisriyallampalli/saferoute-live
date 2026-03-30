@@ -1,8 +1,66 @@
 const Hazard = require('../models/Hazard');
 const SafeFeed = require('../models/SafeFeed');
 const { createSafetyScorer } = require('../utils/safetyScoring/scorerFactory');
-const { fetchWeatherSnapshot } = require('../utils/safetyScoring/weatherService');
-const { getRouteMidpoint } = require('../utils/safetyScoring/helpers');
+const { fetchWeatherSnapshot, convertWeatherToRisk } = require('../utils/safetyScoring/weatherService');
+const {
+  getRouteMidpoint,
+  normalizeRouteCoordinates,
+  clamp01,
+  haversineDistanceMeters,
+} = require('../utils/safetyScoring/helpers');
+const {
+  getLiveFusionStats,
+  getLiveIncidentsNearPoint,
+  getIncidentRiskNearPoint,
+} = require('../utils/tomtomTrafficService');
+
+function mapSeverityToRisk(severity = 'Medium') {
+  const normalized = String(severity).toLowerCase();
+  if (normalized === 'high') return 0.35;
+  if (normalized === 'medium') return 0.2;
+  return 0.1;
+}
+
+exports.getFusionStats = async (req, res) => {
+  try {
+    const stats = await getLiveFusionStats();
+    return res.json(stats);
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Failed to fetch fusion stats',
+      error: error.message,
+    });
+  }
+};
+
+exports.getLiveIncidents = async (req, res) => {
+  try {
+    const lat = Number(req.query.lat ?? process.env.TOMTOM_FLOW_CENTER_LAT ?? 17.3850);
+    const lng = Number(req.query.lng ?? process.env.TOMTOM_FLOW_CENTER_LNG ?? 78.4867);
+    const radiusKm = Number(req.query.radius_km ?? 3);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: 'Invalid lat/lng query params' });
+    }
+
+    const incidents = await getLiveIncidentsNearPoint({
+      latitude: lat,
+      longitude: lng,
+      radiusKm,
+    });
+
+    return res.json({
+      incidents,
+      count: incidents.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Failed to fetch live incidents',
+      error: error.message,
+    });
+  }
+};
 
 /**
  * Report a new hazard (from mobile/admin)
@@ -124,6 +182,7 @@ exports.scoreRoutes = async (req, res) => {
     const {
       routes,
       route,
+      transport_mode: transportModeFromBody,
       weather_api_key: providedWeatherApiKey,
       scorer = 'rule-based',
       segment_length_m: segmentLengthMeters,
@@ -143,11 +202,6 @@ exports.scoreRoutes = async (req, res) => {
     }
 
     const weatherApiKey = providedWeatherApiKey || process.env.WEATHER_API_KEY;
-    if (!weatherApiKey) {
-      return res.status(400).json({
-        message: 'WEATHER_API_KEY is required (request body weather_api_key or server env WEATHER_API_KEY)',
-      });
-    }
 
     const scorerImpl = createSafetyScorer(scorer);
     const effectiveNow = now ? new Date(now) : new Date();
@@ -158,12 +212,19 @@ exports.scoreRoutes = async (req, res) => {
       });
     }
 
-    const scoredRoutes = [];
+    const weatherRiskCache = new Map();
+    const weatherRiskPromiseCache = new Map();
+    const hazardRiskCache = new Map();
+    const hazardRiskPromiseCache = new Map();
 
-    for (const currentRoute of candidateRoutes) {
-      const coordinates = Array.isArray(currentRoute.coordinates)
-        ? currentRoute.coordinates
-        : [];
+    const scoredRoutes = await Promise.all(candidateRoutes.map(async (currentRoute) => {
+      const effectiveTransportMode =
+        currentRoute.transport_mode ||
+        currentRoute.transportMode ||
+        transportModeFromBody ||
+        'car';
+
+      const coordinates = normalizeRouteCoordinates(currentRoute.coordinates);
 
       if (coordinates.length < 2) {
         return res.status(400).json({
@@ -172,32 +233,171 @@ exports.scoreRoutes = async (req, res) => {
       }
 
       const midpoint = getRouteMidpoint(coordinates);
-      const weather = await fetchWeatherSnapshot({
-        latitude: midpoint.latitude,
-        longitude: midpoint.longitude,
-        apiKey: weatherApiKey,
-      });
+      const routeIncidents = midpoint
+        ? await getLiveIncidentsNearPoint({
+            latitude: midpoint.latitude,
+            longitude: midpoint.longitude,
+            radiusKm: 4,
+          }).catch(() => [])
+        : [];
+
+      const routeNearbyHazards = midpoint
+        ? await Hazard.find({
+            location: {
+              $near: {
+                $geometry: {
+                  type: 'Point',
+                  coordinates: [midpoint.longitude, midpoint.latitude],
+                },
+                $maxDistance: 5000,
+              },
+            },
+            isActive: true,
+          }).limit(200)
+        : [];
+
+      const getWeatherRisk = async (point) => {
+        // Coarser bucket lowers external API fan-out and keeps scoring responsive.
+        const cacheKey = `${point.latitude.toFixed(1)}:${point.longitude.toFixed(1)}`;
+        if (weatherRiskCache.has(cacheKey)) {
+          return weatherRiskCache.get(cacheKey);
+        }
+
+        if (weatherRiskPromiseCache.has(cacheKey)) {
+          return weatherRiskPromiseCache.get(cacheKey);
+        }
+
+        const pending = (async () => {
+          try {
+            const weather = await fetchWeatherSnapshot({
+              latitude: point.latitude,
+              longitude: point.longitude,
+              apiKey: weatherApiKey,
+            });
+            const risk = clamp01(convertWeatherToRisk(weather));
+            weatherRiskCache.set(cacheKey, risk);
+            return risk;
+          } catch (error) {
+            const fallbackRisk = 0.3;
+            weatherRiskCache.set(cacheKey, fallbackRisk);
+            return fallbackRisk;
+          } finally {
+            weatherRiskPromiseCache.delete(cacheKey);
+          }
+        })();
+
+        weatherRiskPromiseCache.set(cacheKey, pending);
+        return pending;
+      };
+
+      const getHazardRisk = async (point, meta = {}) => {
+        const cacheKey = `${point.latitude.toFixed(3)}:${point.longitude.toFixed(3)}`;
+        if (hazardRiskCache.has(cacheKey)) {
+          return hazardRiskCache.get(cacheKey);
+        }
+
+        if (hazardRiskPromiseCache.has(cacheKey)) {
+          return hazardRiskPromiseCache.get(cacheKey);
+        }
+
+        const pending = (async () => {
+          try {
+            const baseFallback = typeof meta.fallback === 'number' ? meta.fallback : 0.1;
+            const nearbyHazards = routeNearbyHazards.filter((hazard) => {
+              const coords = hazard?.location?.coordinates || [];
+              const hazardPoint = {
+                latitude: Number(coords[1]),
+                longitude: Number(coords[0]),
+              };
+
+              if (!Number.isFinite(hazardPoint.latitude) || !Number.isFinite(hazardPoint.longitude)) {
+                return false;
+              }
+
+              const meters = haversineDistanceMeters(point, hazardPoint);
+              return meters <= 200;
+            });
+
+            const severityRisk = nearbyHazards.reduce((sum, hazard) => {
+              const coords = hazard?.location?.coordinates || [];
+              const hazardPoint = {
+                latitude: Number(coords[1]),
+                longitude: Number(coords[0]),
+              };
+
+              if (!Number.isFinite(hazardPoint.latitude) || !Number.isFinite(hazardPoint.longitude)) {
+                return sum;
+              }
+
+              const meters = haversineDistanceMeters(point, hazardPoint);
+              const distanceWeight = meters <= 80 ? 1 : meters <= 150 ? 0.6 : 0.35;
+              return sum + (mapSeverityToRisk(hazard.severity) * distanceWeight);
+            }, 0);
+
+            const normalizedSeverity = Math.min(0.7, severityRisk);
+            const incidentRisk = getIncidentRiskNearPoint(point, routeIncidents);
+            const risk = clamp01(baseFallback + normalizedSeverity + incidentRisk);
+
+            hazardRiskCache.set(cacheKey, risk);
+            return risk;
+          } catch (error) {
+            const fallbackRisk = clamp01(typeof meta.fallback === 'number' ? meta.fallback : 0.15);
+            hazardRiskCache.set(cacheKey, fallbackRisk);
+            return fallbackRisk;
+          } finally {
+            hazardRiskPromiseCache.delete(cacheKey);
+          }
+        })();
+
+        hazardRiskPromiseCache.set(cacheKey, pending);
+        return pending;
+      };
+
+      let routeWeather = null;
+      if (midpoint) {
+        try {
+          routeWeather = await fetchWeatherSnapshot({
+            latitude: midpoint.latitude,
+            longitude: midpoint.longitude,
+            apiKey: weatherApiKey,
+          });
+        } catch (error) {
+          routeWeather = null;
+        }
+      }
 
       const scored = scorerImpl.scoreRoute(currentRoute, {
-        weather,
+        transportMode: effectiveTransportMode,
+        weather: routeWeather || { condition: 'clear' },
+        getWeatherRisk,
+        getHazardRisk,
+        hasCrimeData: false,
+        hasWeatherData: Boolean(routeWeather && !routeWeather.fallback),
+        hasHazardData: true,
         now: effectiveNow,
         segmentLengthMeters,
       });
 
-      scoredRoutes.push({
-        ...scored,
-        weather: {
-          condition: weather.rawCondition,
-          description: weather.description,
-          visibility_m: weather.visibilityMeters,
-          rain_mm: weather.rainVolume,
-          temperature_c: weather.temperatureCelsius,
-        },
-      });
-    }
+      return {
+        ...(await scored),
+        ...(routeWeather
+          ? {
+              weather: {
+                condition: routeWeather.rawCondition,
+                description: routeWeather.description,
+                visibility_m: routeWeather.visibilityMeters,
+                rain_mm: routeWeather.rainVolume,
+                temperature_c: routeWeather.temperatureCelsius,
+              },
+            }
+          : {}),
+        incidents_count: routeIncidents.length,
+      };
+    }));
 
     return res.json({
       scorer: 'rule-based',
+      schema_version: '2026-03-transport-mode-v1',
       updated_at: new Date().toISOString(),
       routes: scoredRoutes,
     });

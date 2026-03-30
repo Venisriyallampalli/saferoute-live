@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, Switch, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { Shield, Bell, Eye, UserCircle2, LogOut } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { getDefaultSettings, loadSettings, saveSettings } from '../services/settingsService';
+import { LIVE_SHARE_SMS_AUTO_KEY } from '../utils/storageKeys';
 
 export default function SettingsScreen() {
   const { user, logout } = useAuth();
@@ -16,9 +18,14 @@ export default function SettingsScreen() {
     const init = async () => {
       setLoading(true);
       try {
+        const consent = await AsyncStorage.getItem(LIVE_SHARE_SMS_AUTO_KEY);
         const loaded = await loadSettings(userId);
         const merged = {
           ...loaded,
+          autoSmsShareToTrustedContacts:
+            typeof loaded.autoSmsShareToTrustedContacts === 'boolean'
+              ? loaded.autoSmsShareToTrustedContacts
+              : consent === 'true',
           profile: {
             ...loaded.profile,
             displayName: loaded.profile?.displayName || user?.name || '',
@@ -54,6 +61,10 @@ export default function SettingsScreen() {
     setSaving(true);
     try {
       await saveSettings(userId, settings);
+      await AsyncStorage.setItem(
+        LIVE_SHARE_SMS_AUTO_KEY,
+        settings.autoSmsShareToTrustedContacts ? 'true' : 'false'
+      );
       Alert.alert('Saved', 'Your settings were updated.');
     } catch (error) {
       Alert.alert('Save failed', error.message || 'Unable to save settings.');
@@ -149,6 +160,14 @@ export default function SettingsScreen() {
               <Text className="text-slate-700 font-semibold ml-3">Share Live Location by Default</Text>
             </View>
             <Switch value={settings.shareLiveLocationByDefault} onValueChange={(value) => setToggle('shareLiveLocationByDefault', value)} />
+          </View>
+
+          <View className="px-5 py-4 border-t border-slate-50 flex-row items-center justify-between">
+            <View className="flex-row items-center flex-1">
+              <Shield size={18} color="#2563eb" />
+              <Text className="text-slate-700 font-semibold ml-3">Auto SMS Share to Trusted Contacts</Text>
+            </View>
+            <Switch value={settings.autoSmsShareToTrustedContacts} onValueChange={(value) => setToggle('autoSmsShareToTrustedContacts', value)} />
           </View>
         </View>
 
