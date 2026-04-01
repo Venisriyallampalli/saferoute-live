@@ -27,6 +27,21 @@ function getTransportModeLabel(mode) {
   return found?.label || 'Car';
 }
 
+function formatAddress(location) {
+  if (!location) return 'My Location';
+
+  const parts = [
+    location.name,
+    location.street,
+    location.district,
+    location.city,
+    location.region,
+    location.postalCode,
+  ].filter(Boolean);
+
+  return parts.length ? parts.join(', ') : 'My Location';
+}
+
 export default function RoutePlannerScreen({ navigation }) {
   const { theme, colors } = useTheme();
   const mapRef = useRef(null);
@@ -69,7 +84,9 @@ export default function RoutePlannerScreen({ navigation }) {
       };
       
       setSource(point);
-      setSourceInput('My Precise Location');
+
+      const [address] = await Location.reverseGeocodeAsync(point).catch(() => []);
+      setSourceInput(formatAddress(address));
       setRegion({
         ...point,
         latitudeDelta: 0.05,

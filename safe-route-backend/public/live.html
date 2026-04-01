@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SafeRoute - Live Location</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+     crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+     crossorigin=""></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; background-color: #f0f2f5; }
+        #map { height: 100vh; width: 100%; }
+        .info-panel {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: white;
+            padding: 15px 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            text-align: center;
+        }
+        .info-panel h1 { font-size: 1.2rem; margin: 0 0 5px 0; color: #1c1e21; }
+        .info-panel p { font-size: 0.9rem; margin: 0; color: #606770; }
+        .error-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1001;
+            background: #fffbe6;
+            color: #9f580a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ffe58f;
+            display: none; /* Initially hidden */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+    <div class="info-panel">
+        <h1>SafeRoute Live Share</h1>
+        <p id="status">Connecting to live location...</p>
+    </div>
+    <div id="error-message" class="error-message">
+        The live sharing session has ended or the link is invalid.
+    </div>
+
+    <script>
+        const map = L.map('map').setView([20.5937, 78.9629], 5); // Default to India
+        let marker = null;
+        let pathLine = null;
+        let firstUpdate = true;
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        const sessionId = window.location.pathname.split('/').pop();
+        const statusEl = document.getElementById('status');
+        const errorEl = document.getElementById('error-message');
+
+        async function fetchLocation() {
+            try {
+                const response = await fetch(`/api/live/${sessionId}`);
+                if (!response.ok) {
+                    throw new Error('Session ended or not found');
+                }
+                const data = await response.json();
+
+                if (data.success && data.location) {
+                    const { latitude, longitude, timestamp } = data.location;
+                    const latLng = [latitude, longitude];
+                    
+                    statusEl.textContent = `Last updated: ${new Date(timestamp).toLocaleTimeString()}`;
+
+                    if (!marker) {
+                        marker = L.marker(latLng).addTo(map);
+                        marker.bindPopup("<b>Live Location</b>").openPopup();
+                    } else {
+                        marker.setLatLng(latLng);
+                    }
+
+                    if (firstUpdate) {
+                        map.setView(latLng, 16);
+                        firstUpdate = false;
+                    }
+
+                    if (Array.isArray(data.path) && data.path.length) {
+                        const pathLatLngs = data.path
+                            .filter((point) => point && point.latitude != null && point.longitude != null)
+                            .map((point) => [point.latitude, point.longitude]);
+
+                        if (pathLatLngs.length) {
+                            if (!pathLine) {
+                                pathLine = L.polyline(pathLatLngs, { color: '#2563eb', weight: 4, opacity: 0.8 }).addTo(map);
+                            } else {
+                                pathLine.setLatLngs(pathLatLngs);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching location:', error);
+                statusEl.textContent = 'Session ended.';
+                errorEl.style.display = 'block';
+                // Stop polling if the session is invalid
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                }
+            }
+        }
+
+        // Fetch immediately and then poll every 5 seconds
+        fetchLocation();
+        const pollingInterval = setInterval(fetchLocation, 5000);
+    </script>
+
+</body>
+</html>

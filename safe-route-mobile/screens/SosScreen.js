@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Alert, Linking, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, Linking, ActivityIndicator, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { TriangleAlert, Phone, ShieldCheck, ArrowLeft, Users, Zap, Shield, HelpCircle, MapPin } from 'lucide-react-native';
 import { Audio } from 'expo-av';
@@ -10,13 +10,15 @@ import { getCurrentLocation, requestLocationPermission } from '../services/locat
 import { loadContacts } from '../services/contactsService';
 import { notifyContactsBySms, triggerSosAlert, updateSosLocation } from '../services/sosService';
 
-const SIREN_LOCK_MS = 6000;
+const SIREN_LOCK_MS = 180000; // 3 minutes
+const SIREN_AUTO_OFF_MS = 300000; // 5 minutes
 
 export default function SosScreen({ navigation }) {
    const { user } = useAuth();
 
    const userId = user?.id || user?._id || 'anonymous';
    const trackingTimerRef = useRef(null);
+   const sirenTimeoutRef = useRef(null);
 
    const [isActivating, setIsActivating] = useState(false);
    const [isSosActive, setIsSosActive] = useState(false);
@@ -89,7 +91,7 @@ export default function SosScreen({ navigation }) {
                playsInSilentModeIOS: true,
                shouldDuckAndroid: false,
                playThroughEarpieceAndroid: false,
-               staysActiveInBackground: false,
+               staysActiveInBackground: true, // Keep audio active in background
             });
 
             const { sound } = await Audio.Sound.createAsync(
@@ -144,6 +146,29 @@ export default function SosScreen({ navigation }) {
 
       return () => clearInterval(timer);
    }, [sirenLockUntil, isSosActive]);
+
+   useEffect(() => {
+      // Clear any existing auto-off timer when the component unmounts or dependencies change.
+      if (sirenTimeoutRef.current) {
+         clearTimeout(sirenTimeoutRef.current);
+      }
+
+      // If the siren is active, set a new timer to turn it off automatically.
+      if (isSosActive && sirenOn) {
+         sirenTimeoutRef.current = setTimeout(() => {
+            setSirenOn(false);
+            // Optionally, alert the user that the siren has been turned off.
+            Alert.alert('Siren Deactivated', 'The siren has been automatically turned off after 5 minutes.');
+         }, SIREN_AUTO_OFF_MS);
+      }
+
+      // Cleanup function to clear the timer.
+      return () => {
+         if (sirenTimeoutRef.current) {
+            clearTimeout(sirenTimeoutRef.current);
+         }
+      };
+   }, [isSosActive, sirenOn]);
 
    const mapRegion = useMemo(() => {
       if (!userLocation) return null;
@@ -351,13 +376,8 @@ export default function SosScreen({ navigation }) {
                <ShieldCheck size={18} color="#10b981" />
             </TouchableOpacity>
 
-                  <TouchableOpacity
+                  <View
                      className="bg-white/95 h-20 rounded-[32px] flex-row items-center px-8 border border-white/10 shadow-xl"
-                     onPress={() => {
-                        if (isSirenLocked) return;
-                        setSirenOn((prev) => !prev);
-                     }}
-                     disabled={!isSosActive || isSirenLocked}
                   >
                      <Zap size={24} color={isSosActive ? (sirenOn ? '#ef4444' : '#64748b') : '#94a3b8'} />
                      <View className="ml-5 flex-1">
@@ -368,7 +388,18 @@ export default function SosScreen({ navigation }) {
                               : (isSosActive ? (sirenOn ? 'On' : 'Off') : 'Enable after SOS')}
                         </Text>
                      </View>
-                  </TouchableOpacity>
+                     <Switch
+                        trackColor={{ false: "#767577", true: "#f43f5e" }}
+                        thumbColor={sirenOn ? "#ef4444" : "#f4f3f4"}
+                        ios_backgroundColor="#3e3e3e"
+                        onValueChange={() => {
+                           if (isSirenLocked) return;
+                           setSirenOn((prev) => !prev);
+                        }}
+                        value={sirenOn}
+                        disabled={!isSosActive || isSirenLocked}
+                     />
+                  </View>
 
             <TouchableOpacity 
               style={{ backgroundColor: 'rgba(255,255,255,0.05)' }} 

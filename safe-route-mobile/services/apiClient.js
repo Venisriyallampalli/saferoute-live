@@ -19,22 +19,41 @@ export async function getAuthHeaders() {
 
 export async function apiRequest(endpoint, options = {}) {
   const headers = await getAuthHeaders();
+  const url = `${API_BASE_URL}${endpoint}`;
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      ...headers,
-      ...(options.headers || {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        ...headers,
+        ...(options.headers || {}),
+      },
+    });
+  } catch (error) {
+    const networkError = new Error('Network request failed');
+    networkError.cause = error;
+    networkError.url = url;
+    throw networkError;
+  }
 
-  const data = await response.json().catch(() => ({}));
+  const rawText = await response.text();
+  let data = {};
+
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText);
+    } catch (error) {
+      data = { raw: rawText };
+    }
+  }
 
   if (!response.ok) {
     const message = data.message || data.error || 'Request failed';
     const error = new Error(message);
     error.status = response.status;
     error.data = data;
+    error.url = url;
     throw error;
   }
 

@@ -20,7 +20,9 @@ import GlobalHeader from '../components/GlobalHeader';
 import { useAuth } from '../context/AuthContext';
 import { loadContacts } from '../services/contactsService';
 import { requestLocationPermission, getCurrentLocation, reverseGeocodeCoords, buildLiveLocationLink } from '../services/locationService';
-import { LIVE_SHARE_SMS_AUTO_KEY } from '../utils/storageKeys';
+import { startLiveShare, stopLiveShare, startLiveShareUpdates, stopLiveShareUpdates } from '../services/liveShareService';
+import { startBackgroundLiveShareUpdates, stopBackgroundLiveShareUpdates } from '../services/liveShareBackground';
+import { LIVE_SHARE_SMS_AUTO_KEY, LIVE_SESSION_ID_KEY, LIVE_SESSION_CONTACT_ID_KEY } from '../utils/storageKeys';
 
 export default function ShareLiveScreen({ navigation }) {
   const { theme, colors } = useTheme();
@@ -33,6 +35,8 @@ export default function ShareLiveScreen({ navigation }) {
    const [loading, setLoading] = useState(true);
    const [sharingContactId, setSharingContactId] = useState(null);
    const [autoSmsAllowed, setAutoSmsAllowed] = useState(false);
+   const [liveSessionId, setLiveSessionId] = useState(null);
+   const [liveSessionContactId, setLiveSessionContactId] = useState(null);
 
    const filteredContacts = useMemo(() => {
       const query = searchQuery.trim().toLowerCase();
@@ -168,25 +172,50 @@ export default function ShareLiveScreen({ navigation }) {
          return false;
       }
 
+      const backgroundAllowed = await startBackgroundLiveShareUpdates(5000);
+      if (!backgroundAllowed) {
+         Alert.alert('Background permission needed', 'Please allow background location to keep live sharing running.');
+         return false;
+      }
+
       return true;
    };
 
    const shareToContactNow = async (contact) => {
       setSharingContactId(contact.id);
       try {
-         const trustedContacts = getTrustedContacts();
-         const recipients = trustedContacts.map((item) => item.phone).filter(Boolean);
+         const recipients = [contact?.phone].filter(Boolean);
 
          const location = await getCurrentLocation();
-         const mapLink = buildLiveLocationLink(location.latitude, location.longitude);
+         
+         // Start the live share session with the backend
+         const { sessionId, shareUrl } = await startLiveShare({
+            latitude: location.latitude,
+            longitude: location.longitude,
+         });
+
+         await AsyncStorage.setItem(LIVE_SESSION_ID_KEY, sessionId);
+         await AsyncStorage.setItem(LIVE_SESSION_CONTACT_ID_KEY, String(contact.id));
+         setLiveSessionId(sessionId);
+         setLiveSessionContactId(contact.id);
+         const backgroundOk = await startBackgroundLiveShareUpdates(5000);
+         if (!backgroundOk) {
+            await startLiveShareUpdates(sessionId, getCurrentLocation, 5000);
+         }
+
          const place = await reverseGeocodeCoords(location.latitude, location.longitude).catch(() => 'Current location');
 
-         const message = [`Hi, I am sharing my live location via SafeRoute.`, `Location: ${place}`, mapLink].join('\n');
+         const message = [
+            `Hi, I am sharing my live location with you for the next hour via SafeRoute.`,
+            `You can view my real-time movement here:`,
+            shareUrl,
+            `My current location is near: ${place}.`
+         ].join('\n');
 
          await sendViaSmsOrShare(recipients, message);
-         Alert.alert('Shared', `Live location SMS prepared for ${recipients.length} trusted contact${recipients.length > 1 ? 's' : ''}.`);
+         Alert.alert('Live Share Started', 'A link to your live location has been sent to the selected contact.');
       } catch (error) {
-         Alert.alert('Share failed', error.message || 'Could not share live location right now.');
+         Alert.alert('Share failed', error.message || 'Could not start live sharing session.');
       } finally {
          setSharingContactId(null);
       }
@@ -208,7 +237,9 @@ export default function ShareLiveScreen({ navigation }) {
       })();
    };
 
-  const renderEmptyState = () => (
+   const isSharingLive = !!liveSessionId;
+
+   const renderEmptyState = () => (
     <View className="flex-1 items-center justify-center px-10 pt-20">
       <View style={{ backgroundColor: theme.primary + '15' }} className="w-24 h-24 rounded-[40px] items-center justify-center mb-8">
         <Users size={48} color={theme.primary} />
@@ -229,6 +260,8 @@ export default function ShareLiveScreen({ navigation }) {
 
    const renderContactCard = (contact) => {
       const sharing = sharingContactId === contact.id;
+      const isActiveShareTarget = isSharingLive && (!liveSessionContactId || liveSessionContactId === contact.id);
+      const isSharingDisabled = sharing || (isSharingLive && liveSessionContactId && !isActiveShareTarget);
 
       return (
          <View key={contact.id} style={{ backgroundColor: colors.surface }} className="p-5 rounded-[28px] mb-4 border border-slate-100/10">
@@ -240,18 +273,59 @@ export default function ShareLiveScreen({ navigation }) {
                </View>
 
                <TouchableOpacity
-                  style={{ backgroundColor: sharing ? theme.primary + '90' : theme.primary }}
+                  style={{ backgroundColor: isActiveShareTarget ? '#ef4444' : theme.primary }}
                   className="px-4 py-3 rounded-2xl flex-row items-center"
-                  disabled={sharing}
-                  onPress={() => handleShareToContact(contact)}
+                  disabled={isSharingDisabled}
+                  onPress={() => {
+                     if (isActiveShareTarget) {
+                        stopLiveLocationUpdates();
+                     } else {
+                        handleShareToContact(contact);
+                     }
+                  }}
                >
                   {sharing ? <ActivityIndicator size="small" color="white" /> : <Navigation size={16} color="white" />}
-                  <Text className="text-white font-black text-xs uppercase tracking-wider ml-2">Share Live</Text>
+                  <Text className="text-white font-black text-xs uppercase tracking-wider ml-2">
+                     {isActiveShareTarget ? 'Stop Sharing' : 'Share Live'}
+                  </Text>
                </TouchableOpacity>
             </View>
          </View>
       );
    };
+
+   const stopLiveLocationUpdates = async () => {
+      stopLiveShareUpdates();
+      await stopBackgroundLiveShareUpdates();
+      if (liveSessionId) {
+         try {
+            await stopLiveShare(liveSessionId);
+            await AsyncStorage.removeItem(LIVE_SESSION_ID_KEY);
+            await AsyncStorage.removeItem(LIVE_SESSION_CONTACT_ID_KEY);
+            setLiveSessionId(null);
+            setLiveSessionContactId(null);
+            Alert.alert('Live Share Ended', 'You have stopped sharing your location.');
+         } catch (error) {
+            Alert.alert('Error', 'Could not stop the live session on the server.');
+         }
+      }
+   };
+
+   useEffect(() => {
+      const checkActiveSession = async () => {
+         const activeId = await AsyncStorage.getItem(LIVE_SESSION_ID_KEY);
+         const activeContactId = await AsyncStorage.getItem(LIVE_SESSION_CONTACT_ID_KEY);
+         if (activeId) {
+            setLiveSessionId(activeId);
+            setLiveSessionContactId(activeContactId || null);
+            const backgroundOk = await startBackgroundLiveShareUpdates(5000);
+            if (!backgroundOk) {
+               await startLiveShareUpdates(activeId, getCurrentLocation, 5000);
+            }
+         }
+      };
+      checkActiveSession();
+   }, []);
 
   return (
     <SafeAreaView style={{ backgroundColor: colors.background }} className="flex-1">

@@ -1,57 +1,57 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView, Image, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Shield, Eye, EyeOff, Navigation, Mail, Lock, Globe } from 'lucide-react-native';
-import * as WebBrowser from 'expo-web-browser';
-import * as Google from 'expo-auth-session/providers/google';
+// import { Image, Alert } from 'react-native';
+// import * as WebBrowser from 'expo-web-browser';
+// import * as Google from 'expo-auth-session/providers/google';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 
-WebBrowser.maybeCompleteAuthSession();
+// WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen({ navigation }) {
-  const { login, loginWithGoogle, setGuestUser } = useAuth();
+  const { login, setGuestUser } = useAuth();
   const { theme, colors } = useTheme();
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    androidClientId: '724794335326-e5gqlfsio3h98800eom3ce8hquknd5j0.apps.googleusercontent.com',
-    iosClientId: '724794335326-5trdrs151089giav4elqdsqsn22r8h83.apps.googleusercontent.com',
-    webClientId: '724794335326-r0jpmeca017uq9tifh8g1gtqt1ui25kj.apps.googleusercontent.com',
-    useProxy: true, // Forces redirect through auth.expo.io
-  });
+  // const [request, response, promptAsync] = Google.useAuthRequest({
+  //   androidClientId: '724794335326-e5gqlfsio3h98800eom3ce8hquknd5j0.apps.googleusercontent.com',
+  //   iosClientId: '724794335326-5trdrs151089giav4elqdsqsn22r8h83.apps.googleusercontent.com',
+  //   webClientId: '724794335326-r0jpmeca017uq9tifh8g1gtqt1ui25kj.apps.googleusercontent.com',
+  //   useProxy: true, // Forces redirect through auth.expo.io
+  // });
 
-  React.useEffect(() => {
-    if (response?.type === 'success') {
-      const { authentication } = response;
-      handleGoogleToken(authentication.accessToken);
-    }
-  }, [response]);
+  // React.useEffect(() => {
+  //   if (response?.type === 'success') {
+  //     const { authentication } = response;
+  //     handleGoogleToken(authentication.accessToken);
+  //   }
+  // }, [response]);
 
-  const handleGoogleToken = async (token) => {
-    setSubmitting(true);
-    try {
-      // Fetch user info from Google
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const googleUser = await res.json();
+  // const handleGoogleToken = async (token) => {
+  //   setSubmitting(true);
+  //   try {
+  //     const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+  //       headers: { Authorization: `Bearer ${token}` },
+  //     });
+  //     const googleUser = await res.json();
 
-      const result = await loginWithGoogle({
-        googleId: googleUser.sub,
-        email: googleUser.email,
-        name: googleUser.name,
-        picture: googleUser.picture
-      });
+  //     const result = await loginWithGoogle({
+  //       googleId: googleUser.sub,
+  //       email: googleUser.email,
+  //       name: googleUser.name,
+  //       picture: googleUser.picture
+  //     });
 
-      if (!result.success) {
-        setError(result.error);
-      }
-    } catch (err) {
-      setError('Google Authentication failed.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  //     if (!result.success) {
+  //       setError(result.error);
+  //     }
+  //   } catch (err) {
+  //     setError('Google Authentication failed.');
+  //   } finally {
+  //     setSubmitting(false);
+  //   }
+  // };
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -140,6 +140,7 @@ export default function LoginScreen({ navigation }) {
               {submitting ? <ActivityIndicator color="white" /> : <Text className="text-white font-black uppercase tracking-widest">Sign In</Text>}
             </TouchableOpacity>
 
+            {/*
             <View className="flex-row items-center my-6 text-slate-400">
               <View className="flex-1 h-[1px] bg-slate-100" />
               <Text className="mx-4 text-[10px] font-black uppercase tracking-widest opacity-20">or connect with</Text>
@@ -158,8 +159,7 @@ export default function LoginScreen({ navigation }) {
               />
               <Text style={{ color: colors.text }} className="font-bold text-sm">Continue with Google</Text>
             </TouchableOpacity>
-
-
+            */}
 
             <TouchableOpacity className="items-center py-4" onPress={handleGuestAccess}>
               <Text style={{ color: theme.primary }} className="font-black uppercase tracking-widest text-[11px]">Continue without account</Text>

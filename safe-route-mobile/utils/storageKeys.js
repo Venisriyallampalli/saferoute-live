@@ -7,3 +7,5 @@ export const SETTINGS_KEY_PREFIX = 'saferoute_settings';
 export const HAZARD_REPORTS_KEY_PREFIX = 'saferoute_hazard_reports';
 export const HAZARD_LAST_UPDATED_KEY = 'saferoute_hazards_last_updated';
 export const LIVE_SHARE_SMS_AUTO_KEY = 'saferoute_live_share_sms_auto';
+export const LIVE_SESSION_ID_KEY = 'saferoute_live_share_session_id';
+export const LIVE_SESSION_CONTACT_ID_KEY = 'saferoute_live_share_contact_id';

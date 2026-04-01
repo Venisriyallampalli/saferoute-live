@@ -5,12 +5,14 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
 
 const { connectDatabase } = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const safetyRoutes = require('./routes/safetyRoutes');
 const contactsRoutes = require('./routes/contactsRoutes');
 const sosRoutes = require('./routes/sosRoutes');
+const liveShareRoutes = require('./routes/liveShareRoutes');
 const { getLiveFusionStats } = require('./utils/tomtomTrafficService');
 
 const app = express();
@@ -45,6 +47,12 @@ app.use('/api/auth', authRoutes);
 app.use('/api/safety', safetyRoutes);
 app.use('/api/contacts', contactsRoutes);
 app.use('/api/sos', sosRoutes);
+app.use('/api/live', liveShareRoutes);
+
+// Route to serve the live tracking page
+app.get('/live/:sessionId', (req, res) => {
+    res.sendFile(path.join(__dirname, '../public/live.html'));
+});
 
 // Real-time Socket interactions
 io.on('connection', (socket) => {

@@ -14,7 +14,10 @@
         "googleMapsApiKey": "AIzaSyBwM1roefK1NyDGhIgodrsdiDZOBKI8hSM"
       },
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "SafeRoute Live needs your location to show it on the map and for safety navigation."
+        "NSLocationWhenInUseUsageDescription": "SafeRoute Live needs your location to show it on the map and for safety navigation.",
+        "NSLocationAlwaysUsageDescription": "SafeRoute Live needs background location to keep live sharing active.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SafeRoute Live needs background location to keep live sharing active.",
+        "UIBackgroundModes": ["location"]
       }
     },
     "android": {
@@ -27,6 +30,7 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION"
       ],
