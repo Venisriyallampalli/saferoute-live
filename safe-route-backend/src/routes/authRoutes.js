@@ -98,6 +98,35 @@ router.post('/login', async (req, res) => {
   }
 });
 
+router.post('/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ message: 'Admin account required' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    const token = signToken(user._id);
+
+    return res.status(200).json({
+      token,
+      user: user.toPublicJSON(),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to login admin' });
+  }
+});
+
 router.get('/me', requireAuth, async (req, res) => {
   return res.status(200).json({ user: req.user.toPublicJSON() });
 });

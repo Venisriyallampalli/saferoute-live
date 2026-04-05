@@ -46,6 +46,22 @@ export async function scoreRoutesWithBackend(routes, options = {}) {
     segment_length_m: options.segmentLengthMeters || 100,
   };
 
+  if (options.searchPolicy) {
+    requestBody.search_policy = options.searchPolicy;
+  }
+
+  if (Number.isFinite(Number(options.maxExtraTimePercent))) {
+    requestBody.max_extra_time_percent = Number(options.maxExtraTimePercent);
+  }
+
+  if (Number.isFinite(Number(options.minSafetyScore))) {
+    requestBody.min_safety_score = Number(options.minSafetyScore);
+  }
+
+  if (options.roadTypePreference) {
+    requestBody.road_type_preference = options.roadTypePreference;
+  }
+
   if (WEATHER_API_KEY) {
     requestBody.weather_api_key = WEATHER_API_KEY;
   }
@@ -83,10 +99,12 @@ export async function scoreRoutesWithBackend(routes, options = {}) {
         safety_label: base >= 80 ? 'Safe' : base >= 60 ? 'Moderate' : base >= 40 ? 'Risky' : 'High Risk',
         transport_mode: route.transport_mode || 'car',
         factors: {
-          crime: 0.45,
           weather: 0.3,
           traffic: 0.45,
           hazard: 0.2,
+          accident: 0.25,
+          crowd_presence: 0.25,
+          protective: 0.25,
           lighting: 0.35,
           time: 0.35,
           transport_adjustment: 0,

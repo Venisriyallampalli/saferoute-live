@@ -6,13 +6,16 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const bcrypt = require('bcryptjs');
 
 const { connectDatabase } = require('./config/db');
+const User = require('./models/User');
 const authRoutes = require('./routes/authRoutes');
 const safetyRoutes = require('./routes/safetyRoutes');
 const contactsRoutes = require('./routes/contactsRoutes');
 const sosRoutes = require('./routes/sosRoutes');
 const liveShareRoutes = require('./routes/liveShareRoutes');
+const chatRoutes = require('./routes/chatRoutes');
 const { getLiveFusionStats } = require('./utils/tomtomTrafficService');
 
 const app = express();
@@ -48,6 +51,7 @@ app.use('/api/safety', safetyRoutes);
 app.use('/api/contacts', contactsRoutes);
 app.use('/api/sos', sosRoutes);
 app.use('/api/live', liveShareRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Route to serve the live tracking page
 app.get('/live/:sessionId', (req, res) => {
@@ -86,6 +90,31 @@ setInterval(() => {
      });
 }, 60000); // Pulse every 60 seconds
 
+async function ensureDefaultAdminUser() {
+  const adminEmail = (process.env.ADMIN_EMAIL || 'admin@saferoute.live').toLowerCase().trim();
+  const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@123';
+  const adminName = process.env.ADMIN_NAME || 'SafeRoute Admin';
+  const adminPhone = process.env.ADMIN_PHONE || '+10000000000';
+
+  const existing = await User.findOne({ email: adminEmail });
+  if (existing) {
+    if (existing.role !== 'admin') {
+      existing.role = 'admin';
+      await existing.save();
+    }
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(adminPassword, 10);
+  await User.create({
+    name: adminName,
+    email: adminEmail,
+    phone: adminPhone,
+    passwordHash,
+    role: 'admin',
+  });
+}
+
 async function start() {
   try {
     if (!process.env.JWT_SECRET) {
@@ -93,6 +122,7 @@ async function start() {
     }
 
     await connectDatabase();
+  await ensureDefaultAdminUser();
 
     const port = Number(process.env.PORT || 3001);
     server.listen(port, '0.0.0.0', () => {

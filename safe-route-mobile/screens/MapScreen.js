@@ -65,8 +65,10 @@ export default function MapScreen({ route, navigation }) {
   const [showOptions, setShowOptions] = useState(false);
   const [formCollapsed, setFormCollapsed] = useState(false);
   const [transportMode, setTransportMode] = useState('car');
+  const [chatSessionId, setChatSessionId] = useState(() => `map-session-${Date.now()}`);
   const lastDynamicKeyRef = useRef('');
   const lastRerouteAtRef = useRef(0);
+  const lastRouteSignatureRef = useRef('');
 
   const getTransportModeLabel = (mode) => {
     const normalized = String(mode || '').toLowerCase();
@@ -270,6 +272,7 @@ export default function MapScreen({ route, navigation }) {
       setIsNavigating(true);
       setFormCollapsed(true);
       setShowOptions(false);
+      setChatSessionId(`route-session-${Date.now()}`);
 
       // Start the voice for navigation
       setTimeout(() => {
@@ -277,6 +280,23 @@ export default function MapScreen({ route, navigation }) {
       }, 1500);
     }
   }, [route?.params]);
+
+  useEffect(() => {
+    if (!allRoutes.length) {
+      return;
+    }
+
+    const signature = allRoutes
+      .map((item) => String(item?.id || item?.route_id || 'route'))
+      .join('|');
+
+    if (!signature || signature === lastRouteSignatureRef.current) {
+      return;
+    }
+
+    lastRouteSignatureRef.current = signature;
+    setChatSessionId(`route-session-${Date.now()}`);
+  }, [allRoutes]);
 
   useEffect(() => {
     if (!allRoutes.length) return undefined;
@@ -460,6 +480,7 @@ export default function MapScreen({ route, navigation }) {
     setIsNavigating(newNavState);
 
     if (newNavState) {
+      setChatSessionId(`nav-session-${Date.now()}`);
       if (activeRoute?.coordinates?.length > 1) {
         // Zoom closer for navigation
         mapRef.current?.animateCamera({
@@ -626,7 +647,7 @@ export default function MapScreen({ route, navigation }) {
           ))}
 
         {markers.hazards.map((hazard) => {
-          const isDangerous = ['harassment', 'unsafe', 'accident'].includes(hazard.type);
+          const isDangerous = ['harassment', 'unsafe', 'accident', 'theft', 'assault', 'flooding'].includes(hazard.type);
           return (
             <Marker
               key={`hazard-${hazard.id}`}
@@ -822,7 +843,7 @@ export default function MapScreen({ route, navigation }) {
             <TouchableOpacity 
               style={{ backgroundColor: colors.surface }} 
               className="w-14 h-14 rounded-full items-center justify-center shadow-2xl border border-white/10"
-              onPress={() => navigation.navigate('SafetyChat')}
+              onPress={() => navigation.navigate('SafetyChat', { sessionId: chatSessionId })}
             >
               <MessageSquare size={24} color="#10b981" />
             </TouchableOpacity>

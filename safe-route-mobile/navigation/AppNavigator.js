@@ -18,11 +18,13 @@ import RegisterScreen from '../screens/RegisterScreen';
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import ResetPasswordScreen from '../screens/ResetPasswordScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import AdminDashboardScreen from '../screens/AdminDashboardScreen';
 
 const Stack = createNativeStackNavigator();
 
 export default function AppNavigator() {
-  const { loading, isAuthenticated } = useAuth();
+  const { loading, isAuthenticated, user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   if (loading) {
     return (
@@ -42,6 +44,12 @@ export default function AppNavigator() {
           <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: true, title: 'Create Account' }} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} options={{ headerShown: true, title: 'Forgot Password' }} />
           <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ headerShown: true, title: 'Reset Password' }} />
+        </>
+      ) : isAdmin ? (
+        // Admin App Stack
+        <>
+          <Stack.Screen name="AdminDashboard" component={AdminDashboardScreen} />
+          <Stack.Screen name="Profile" component={ProfileScreen} />
         </>
       ) : (
         // App Stack

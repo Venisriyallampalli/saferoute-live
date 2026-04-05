@@ -13,12 +13,34 @@ import { useAuth } from '../context/AuthContext';
 import { getCurrentLocation, reverseGeocodeCoords } from '../services/locationService';
 import { submitHazardReport } from '../services/hazardService';
 
-const hazardTypes = [
-  { id: 'harassment', label: 'Harassment' },
-  { id: 'accident', label: 'Road Accident' },
-  { id: 'lighting', label: 'Poor Lighting' },
-  { id: 'unsafe', label: 'Unsafe Area' },
-  { id: 'obstruction', label: 'Road Obstruction' },
+const hazardGroups = [
+  {
+    title: 'Personal Safety',
+    types: [
+      { id: 'harassment', label: 'Harassment' },
+      { id: 'unsafe', label: 'Unsafe Area' },
+      { id: 'theft', label: 'Theft Risk' },
+      { id: 'assault', label: 'Assault Risk' },
+    ],
+  },
+  {
+    title: 'Road Condition',
+    types: [
+      { id: 'accident', label: 'Road Accident' },
+      { id: 'obstruction', label: 'Road Obstruction' },
+      { id: 'pothole', label: 'Pothole' },
+      { id: 'construction', label: 'Road Work' },
+    ],
+  },
+  {
+    title: 'Visibility/Environment',
+    types: [
+      { id: 'lighting', label: 'Poor Lighting' },
+      { id: 'poor_visibility', label: 'Poor Visibility' },
+      { id: 'flooding', label: 'Flooded Road' },
+      { id: 'stray_animals', label: 'Stray Animals' },
+    ],
+  },
 ];
 
 export default function SafetyReportScreen({ navigation }) {
@@ -91,20 +113,25 @@ export default function SafetyReportScreen({ navigation }) {
       <Text style={styles.subtitle}>Help others by sharing real-time risks</Text>
 
       <Text style={styles.sectionTitle}>What did you see?</Text>
-      <View style={styles.typeGrid}>
-        {hazardTypes.map((type) => {
-          const isSelected = selectedType === type.id;
-          return (
-            <TouchableOpacity
-              key={type.id}
-              style={[styles.typeCard, isSelected ? styles.typeCardActive : null]}
-              onPress={() => setSelectedType(type.id)}
-            >
-              <Text style={[styles.typeLabel, isSelected ? styles.typeLabelActive : null]}>{type.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {hazardGroups.map((group) => (
+        <View key={group.title} style={styles.typeGroup}>
+          <Text style={styles.groupTitle}>{group.title}</Text>
+          <View style={styles.typeGrid}>
+            {group.types.map((type) => {
+              const isSelected = selectedType === type.id;
+              return (
+                <TouchableOpacity
+                  key={type.id}
+                  style={[styles.typeCard, isSelected ? styles.typeCardActive : null]}
+                  onPress={() => setSelectedType(type.id)}
+                >
+                  <Text style={[styles.typeLabel, isSelected ? styles.typeLabelActive : null]}>{type.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      ))}
 
       <TouchableOpacity style={styles.captureButton} onPress={captureLocation}>
         <Text style={styles.captureButtonText}>Capture Location</Text>
@@ -188,12 +215,22 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     marginTop: 10,
   },
+  typeGroup: {
+    marginBottom: 12,
+  },
+  groupTitle: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 8,
+  },
   typeGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     rowGap: 10,
-    marginBottom: 14,
   },
   typeCard: {
     width: '48%',

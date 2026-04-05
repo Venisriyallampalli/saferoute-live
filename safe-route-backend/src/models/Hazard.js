@@ -5,7 +5,20 @@ const hazardSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ['harassment', 'accident', 'lighting', 'unsafe', 'obstruction'],
+      enum: [
+        'harassment',
+        'accident',
+        'lighting',
+        'unsafe',
+        'obstruction',
+        'pothole',
+        'flooding',
+        'construction',
+        'theft',
+        'assault',
+        'stray_animals',
+        'poor_visibility',
+      ],
     },
     description: {
       type: String,

@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, TextInput, Alert, Dimensions, Platform } from 'react-native';
+import React from 'react';
+import { View, Text, TouchableOpacity, ScrollView, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
-  Shield, MapPin, Users, Zap, Bell, AlertTriangle, 
-  Settings, Terminal, Plus, Clock, Info, ShieldAlert 
+   Shield, MapPin, AlertTriangle, ShieldAlert 
 } from 'lucide-react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from '../components/MapContainer';
 import { useTheme } from '../context/ThemeContext';
@@ -51,14 +50,10 @@ const Gauge = ({ value, label, color }) => {
 export default function DashboardScreen({ navigation }) {
   const { theme, colors } = useTheme();
   const { fusionStats } = useSocket();
-  const [showSimulator, setShowSimulator] = useState(false);
   
   // Live Data States
   const crowdDensity = fusionStats?.crowdDensity || 55;
   const trafficFlow = fusionStats?.trafficFlow || 65;
-  const [lat, setLat] = useState('17.3850');
-  const [lng, setLng] = useState('78.4867');
-  const [type, setType] = useState('Accident');
 
   // Simulations are now handled by the backend heartbeat broadcast, 
   // so we've removed the local setInterval-based randomizer.
@@ -167,85 +162,7 @@ export default function DashboardScreen({ navigation }) {
            ))}
         </View>
 
-        {/* Admin / Simulator Tools Section */}
-        <View className="px-6 py-10 bg-slate-900 rounded-t-[60px] mt-10">
-           <View className="flex-row items-center mb-8">
-              <Terminal size={24} color={theme.primary} />
-              <Text className="text-white text-2xl font-black ml-4">Admin Hub</Text>
-           </View>
-
-           <View className="flex-row flex-wrap justify-between gap-y-4">
-              <TouchableOpacity 
-                className="w-full bg-blue-600 h-16 rounded-[24px] items-center justify-center flex-row shadow-2xl shadow-blue-500"
-                onPress={() => Alert.alert("Predictive Alert", "Simulating deep learning safety prediction...")}
-              >
-                 <Zap size={20} color="white" />
-                 <Text className="text-white font-black ml-3 uppercase tracking-widest">Trigger Neural Alert</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={{ backgroundColor: colors.surface + '20' }}
-                className="w-full h-16 rounded-[24px] items-center justify-center border border-white/10"
-                onPress={() => setShowSimulator(true)}
-              >
-                 <Text className="text-white font-black uppercase tracking-widest text-sm">Open Event Simulator</Text>
-              </TouchableOpacity>
-           </View>
-        </View>
       </ScrollView>
-
-      {/* Simulator Modal */}
-      {showSimulator && (
-        <View className="absolute inset-0 bg-black/80 items-center justify-end z-[100]">
-           <View className="bg-slate-900 w-full rounded-t-[50px] p-10 shadow-2xl border-t border-white/10">
-              <View className="flex-row justify-between items-center mb-10">
-                 <Text className="text-white text-2xl font-black">Event Simulator</Text>
-                 <TouchableOpacity onPress={() => setShowSimulator(false)}>
-                    <X size={24} color="white" />
-                 </TouchableOpacity>
-              </View>
-
-              <View className="gap-y-6 mb-10">
-                 <View>
-                    <Text className="text-white/50 text-[10px] uppercase font-black tracking-widest mb-3 ml-2">Coordinates</Text>
-                    <View className="flex-row gap-x-4">
-                       <TextInput 
-                         className="flex-1 bg-white/5 border border-white/10 h-14 rounded-2xl px-5 text-white font-bold"
-                         value={lat}
-                         onChangeText={setLat}
-                         placeholder="Lat"
-                       />
-                       <TextInput 
-                         className="flex-1 bg-white/5 border border-white/10 h-14 rounded-2xl px-5 text-white font-bold"
-                         value={lng}
-                         onChangeText={setLng}
-                         placeholder="Lng"
-                       />
-                    </View>
-                 </View>
-
-                 <View>
-                    <Text className="text-white/50 text-[10px] uppercase font-black tracking-widest mb-3 ml-2">Event Characteristics</Text>
-                    <View className="bg-white/5 border border-white/10 h-14 rounded-2xl px-5 flex-row items-center justify-between">
-                       <Text className="text-white font-bold">{type}</Text>
-                       <Terminal size={18} color={theme.primary} />
-                    </View>
-                 </View>
-              </View>
-
-              <TouchableOpacity 
-                style={{ backgroundColor: theme.primary }}
-                className="h-16 rounded-[24px] items-center justify-center shadow-2xl shadow-blue-500"
-                onPress={() => {
-                   Alert.alert("Simulating Event", `Type: ${type} at ${lat}, ${lng}`);
-                   setShowSimulator(false);
-                }}
-              >
-                 <Text className="text-white font-black uppercase tracking-widest">Inject Live Data Feed</Text>
-              </TouchableOpacity>
-           </View>
-        </View>
-      )}
     </SafeAreaView>
   );
 }

@@ -95,9 +95,12 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password) => {
+  const login = async (email, password, options = {}) => {
+    const expectedRole = options?.expectedRole || null;
+    const loginPath = expectedRole === 'admin' ? '/api/auth/admin/login' : '/api/auth/login';
+
     try {
-      const response = await fetchWithBaseFallback('/api/auth/login', {
+      const response = await fetchWithBaseFallback(loginPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -106,6 +109,11 @@ export const AuthProvider = ({ children }) => {
       const data = await response.json();
 
       if (response.ok && data.token) {
+        const resolvedRole = data?.user?.role || 'user';
+        if (expectedRole && resolvedRole !== expectedRole) {
+          return { success: false, error: `${expectedRole} account required` };
+        }
+
         await AsyncStorage.setItem(TOKEN_STORAGE_KEY, data.token);
         setToken(data.token);
         setUser(data.user);
@@ -117,6 +125,8 @@ export const AuthProvider = ({ children }) => {
       return { success: false, error: `Network error. Check backend URL in .env (current: ${API_BASE_URL})` };
     }
   };
+
+  const loginAdmin = async (email, password) => login(email, password, { expectedRole: 'admin' });
 
   const register = async (name, email, password, phone) => {
     try {
@@ -229,6 +239,7 @@ export const AuthProvider = ({ children }) => {
     apiBaseUrl: API_BASE_URL,
     loading,
     login,
+    loginAdmin,
     register,
     forgotPassword,
     resetPassword,

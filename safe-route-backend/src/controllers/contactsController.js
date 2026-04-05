@@ -1,6 +1,20 @@
 const Contact = require('../models/Contact');
 
 const MAX_CONTACTS = 10;
+const DEFAULT_EMERGENCY_CONTACTS = [
+  {
+    clientContactId: 'default:police-100',
+    name: 'Police',
+    phone: '100',
+    relation: 'Emergency Service',
+  },
+  {
+    clientContactId: 'default:ambulance-108',
+    name: 'Ambulance',
+    phone: '108',
+    relation: 'Emergency Service',
+  },
+];
 
 function normalizePhone(phone = '') {
   return String(phone).replace(/[^+\d]/g, '').trim();
@@ -40,7 +54,26 @@ exports.getContacts = async (req, res) => {
       return res.status(401).json({ message: 'Authentication required' });
     }
 
-    const contacts = await Contact.find({ userId }).sort({ createdAt: 1 });
+    let contacts = await Contact.find({ userId }).sort({ createdAt: 1 });
+
+    if (!contacts.length && !req.user?.emergencyDefaultsSeeded) {
+      await Contact.insertMany(
+        DEFAULT_EMERGENCY_CONTACTS.map((item) => ({
+          userId,
+          clientContactId: item.clientContactId,
+          name: item.name,
+          phone: normalizePhone(item.phone),
+          relation: item.relation,
+          sourceContactId: null,
+          createdAtClient: new Date(),
+        }))
+      );
+
+      req.user.emergencyDefaultsSeeded = true;
+      await req.user.save();
+
+      contacts = await Contact.find({ userId }).sort({ createdAt: 1 });
+    }
 
     return res.json({
       success: true,

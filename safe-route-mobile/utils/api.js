@@ -21,12 +21,6 @@ export async function getSafeRoutes(source, destination, preference = 'Well-lit'
   return res.json();
 }
 
-export async function getCrimeData() {
-  const res = await fetch(`${API_BASE_URL}/api/getCrimeData`);
-  if (!res.ok) throw new Error('Failed to fetch crime data');
-  return res.json();
-}
-
 export async function getAccidents() {
   const res = await fetch(`${API_BASE_URL}/api/getAccidents`);
   if (!res.ok) throw new Error('Failed to fetch accidents');

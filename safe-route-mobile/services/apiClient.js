@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../utils/config';
 import { AUTH_TOKEN_KEY, LEGACY_TOKEN_KEY } from '../utils/storageKeys';
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
+
 async function getToken() {
   const primary = await AsyncStorage.getItem(AUTH_TOKEN_KEY);
   if (primary) return primary;
@@ -20,21 +22,31 @@ export async function getAuthHeaders() {
 export async function apiRequest(endpoint, options = {}) {
   const headers = await getAuthHeaders();
   const url = `${API_BASE_URL}${endpoint}`;
+  const timeoutMs = Number(options.timeoutMs || DEFAULT_REQUEST_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
 
   let response;
   try {
     response = await fetch(url, {
       ...options,
+      signal: controller.signal,
       headers: {
         ...headers,
         ...(options.headers || {}),
       },
     });
   } catch (error) {
-    const networkError = new Error('Network request failed');
+    const isAbort = error?.name === 'AbortError';
+    const networkError = new Error(isAbort ? 'Request timed out' : 'Network request failed');
     networkError.cause = error;
     networkError.url = url;
+    networkError.timeoutMs = timeoutMs;
     throw networkError;
+  } finally {
+    clearTimeout(timeout);
   }
 
   const rawText = await response.text();

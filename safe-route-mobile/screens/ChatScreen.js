@@ -20,7 +20,8 @@ const buildLiveLocationLink = (lat, lng) =>
   `https://www.google.com/maps?q=${lat},${lng}`;
 
 export default function ChatScreen({ route }) {
-  const { sessionId } = route.params || { sessionId: 'demo-session' };
+  const sessionIdRef = useRef(route?.params?.sessionId || `chat-${Date.now()}`);
+  const sessionId = sessionIdRef.current;
   const { socket } = useSocket();
   const { user } = useAuth();
   
@@ -62,15 +63,7 @@ export default function ChatScreen({ route }) {
       setMessages(data.messages || []);
     } catch (error) {
       console.error('Error loading messages:', error);
-      // For demo purposes, add a mock message if API fails
-      if (sessionId === 'demo-session') {
-        setMessages([{
-          _id: '1',
-          message: 'Welcome to Safety Chat. Send updates to trusted contacts and share your live location if needed.',
-          sender: { _id: 'admin', name: 'SafeRoute Bot' },
-          createdAt: new Date().toISOString()
-        }]);
-      }
+      setMessages([]);
     } finally {
       setLoading(false);
     }
@@ -97,28 +90,11 @@ export default function ChatScreen({ route }) {
         return [...prev, userMsg];
       });
 
-      // AI Logic for Safety Monitoring
-      if (sessionId === 'demo-session') {
-          setTimeout(() => {
-              let aiResponse = "I'm monitoring your route safety. Stay in well-lit areas.";
-              const lower = text.toLowerCase();
-              if (lower.includes('help') || lower.includes('danger')) {
-                  aiResponse = "I have detected a high-priority alert. Should I trigger SOS for you?";
-              } else if (lower.includes('where') || lower.includes('location')) {
-                  aiResponse = "You are currently on the safest calculated path. Your live location is active.";
-              } else if (lower.includes('contacts') || lower.includes('friend')) {
-                  aiResponse = "Your trusted contacts have been notified of your current trip status.";
-              }
-
-              const aiMsg = {
-                  _id: `ai-${Date.now()}`,
-                  message: aiResponse,
-                  sender: { _id: 'ai-assistant', name: 'SafeRoute AI' },
-                  senderName: 'SafeRoute AI',
-                  createdAt: new Date().toISOString()
-              };
-              setMessages(prev => [...prev, aiMsg]);
-          }, 1000);
+      if (data?.aiMessage) {
+        setMessages((prev) => {
+          if (prev.find((item) => item._id === data.aiMessage._id)) return prev;
+          return [...prev, data.aiMessage];
+        });
       }
     } catch (error) {
       alert('Failed to send message');
@@ -143,7 +119,11 @@ export default function ChatScreen({ route }) {
 
       setMessages((prev) => {
         if (prev.find((item) => item._id === data.message?._id)) return prev;
-        return [...prev, data.message];
+        const next = [...prev, data.message];
+        if (data?.aiMessage && !next.find((item) => item._id === data.aiMessage._id)) {
+          next.push(data.aiMessage);
+        }
+        return next;
       });
     } catch (error) {
       Alert.alert('Location share failed', error.message || 'Unable to share location.');
@@ -153,7 +133,7 @@ export default function ChatScreen({ route }) {
   };
 
   const renderMessage = ({ item }) => {
-    const isOwn = item.sender._id === user?.id || item.sender === user?.id || item.senderName === 'You';
+    const isOwn = item.sender?._id === user?.id || item.sender === user?.id || item.senderName === 'You';
     const isAi = item.senderName === 'SafeRoute AI' || item.sender?._id === 'ai-assistant';
 
     return (

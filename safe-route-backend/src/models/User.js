@@ -30,6 +30,16 @@ const userSchema = new mongoose.Schema(
       unique: true,
       sparse: true, // Allows null/missing for email-only users
     },
+    role: {
+      type: String,
+      enum: ['user', 'admin'],
+      default: 'user',
+      index: true,
+    },
+    emergencyDefaultsSeeded: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
@@ -40,6 +50,7 @@ userSchema.methods.toPublicJSON = function toPublicJSON() {
     name: this.name,
     email: this.email,
     phone: this.phone,
+    role: this.role || 'user',
     createdAt: this.createdAt,
     updatedAt: this.updatedAt,
   };

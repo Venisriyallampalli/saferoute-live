@@ -67,10 +67,11 @@ export const sendChatMessage = async (sessionId, message, messageType = 'text', 
   );
 
   const outbound = result?.message || optimisticMessage;
-  const next = [...local, outbound];
+  const aiMessage = result?.aiMessage || null;
+  const next = aiMessage ? [...local, outbound, aiMessage] : [...local, outbound];
   await saveLocalMessages(sessionId, next);
 
-  return { message: outbound };
+  return { message: outbound, aiMessage };
 };
 
 /**

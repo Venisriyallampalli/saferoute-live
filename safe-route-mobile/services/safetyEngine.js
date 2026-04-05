@@ -31,11 +31,6 @@ function inferTrafficRisk(route, segment) {
   return 0.4;
 }
 
-function getCrimeRisk(night, isolated) {
-  const base = night ? 0.6 : 0.3;
-  return clamp01(base + (isolated ? 0.12 : 0));
-}
-
 function normalizeWeights(weights) {
   const sum = Object.values(weights).reduce((acc, value) => acc + value, 0);
   if (!sum) return weights;
@@ -48,9 +43,8 @@ function normalizeWeights(weights) {
   return normalized;
 }
 
-function resolveActiveWeights({ hasCrimeData, hasTrafficData, hasWeatherData, hasHazardData }) {
+function resolveActiveWeights({ hasTrafficData, hasWeatherData, hasHazardData }) {
   const base = {
-    crime: hasCrimeData ? 0.25 : 0,
     traffic: hasTrafficData ? 0.20 : 0.12,
     weather: hasWeatherData ? 0.15 : 0.08,
     hazard: hasHazardData ? 0.15 : 0.08,
@@ -117,7 +111,6 @@ async function resolveRouteWeatherRisk(segments, weatherApiKey) {
 export async function computeRouteSafetyLocally(route, options = {}) {
   const now = options.now instanceof Date ? options.now : new Date();
   const night = isNight(now);
-  const hasCrimeData = Boolean(options.hasCrimeData);
   const hasTrafficData = route?.trafficDensity !== undefined && route?.trafficDensity !== null;
   const hasWeatherData = Boolean(options.weatherApiKey);
   const hasHazardData = true;
@@ -132,7 +125,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
       safety_score: 0,
       safety_label: 'High Risk',
       factors: {
-        crime: 1,
         weather: 1,
         traffic: 1,
         hazard: 1,
@@ -147,13 +139,12 @@ export async function computeRouteSafetyLocally(route, options = {}) {
   let timeRisk = night ? 0.7 : 0.3;
   let lightingRisk = night ? 0.6 : 0.2;
 
-  if (!hasCrimeData && night) {
+  if (night) {
     timeRisk = Math.min(timeRisk, 0.55);
     lightingRisk = Math.min(lightingRisk, 0.45);
   }
 
   const weights = resolveActiveWeights({
-    hasCrimeData,
     hasTrafficData,
     hasWeatherData,
     hasHazardData,
@@ -161,7 +152,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
 
   const totals = {
     segmentSafety: 0,
-    crime: 0,
     weather: 0,
     traffic: 0,
     hazard: 0,
@@ -174,9 +164,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
     : null;
 
   const segmentResults = await Promise.all(segments.map(async (segment) => {
-    const isolated = Math.abs(Math.sin(segment.midpoint.latitude * 37 + segment.midpoint.longitude * 13)) > 0.65;
-
-    const crimeRisk = getCrimeRisk(night, isolated);
     const trafficRisk = inferTrafficRisk(route, segment);
     const weatherRisk = routeWeatherRisk != null
       ? routeWeatherRisk
@@ -190,7 +177,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
         });
 
     const weightedRisk = clamp01(
-      (weights.crime * crimeRisk) +
       (weights.traffic * trafficRisk) +
       (weights.weather * weatherRisk) +
       (weights.hazard * hazardRisk) +
@@ -215,7 +201,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
       risk_score: Number(riskScore.toFixed(3)),
       safety_score: Math.round(segmentSafety * 100),
       factors: {
-        crime: Number(crimeRisk.toFixed(3)),
         weather: Number(weatherRisk.toFixed(3)),
         traffic: Number(trafficRisk.toFixed(3)),
         hazard: Number(hazardRisk.toFixed(3)),
@@ -225,7 +210,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
       },
       __agg: {
         segmentSafety,
-        crimeRisk,
         weatherRisk,
         trafficRisk,
         hazardRisk,
@@ -238,7 +222,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
   const cleanedSegmentResults = segmentResults.map((segment) => {
     const agg = segment.__agg;
     totals.segmentSafety += agg.segmentSafety;
-    totals.crime += agg.crimeRisk;
     totals.weather += agg.weatherRisk;
     totals.traffic += agg.trafficRisk;
     totals.hazard += agg.hazardRisk;
@@ -263,7 +246,6 @@ export async function computeRouteSafetyLocally(route, options = {}) {
       is_night: night,
     },
     factors: {
-      crime: Number((totals.crime / segmentCount).toFixed(3)),
       weather: Number((totals.weather / segmentCount).toFixed(3)),
       traffic: Number((totals.traffic / segmentCount).toFixed(3)),
       hazard: Number((totals.hazard / segmentCount).toFixed(3)),

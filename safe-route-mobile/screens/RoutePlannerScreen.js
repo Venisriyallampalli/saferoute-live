@@ -11,6 +11,7 @@ import GlobalHeader from '../components/GlobalHeader';
 import { TRANSPORT_MODES, fetchRoute, geocodeDestination, fetchPlaceSuggestions } from '../services/navigationService';
 import { scoreRoutesWithBackend, getScoreColor, getDynamicRescoreKey, getSegmentColorBySafety } from '../services/routeSafetyService';
 import * as Location from 'expo-location';
+import { reverseGeocodeCoords } from '../services/locationService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -25,21 +26,6 @@ const TRANSPORT_OPTIONS = [
 function getTransportModeLabel(mode) {
   const found = TRANSPORT_OPTIONS.find((item) => item.key === mode);
   return found?.label || 'Car';
-}
-
-function formatAddress(location) {
-  if (!location) return 'My Location';
-
-  const parts = [
-    location.name,
-    location.street,
-    location.district,
-    location.city,
-    location.region,
-    location.postalCode,
-  ].filter(Boolean);
-
-  return parts.length ? parts.join(', ') : 'My Location';
 }
 
 export default function RoutePlannerScreen({ navigation }) {
@@ -85,8 +71,8 @@ export default function RoutePlannerScreen({ navigation }) {
       
       setSource(point);
 
-      const [address] = await Location.reverseGeocodeAsync(point).catch(() => []);
-      setSourceInput(formatAddress(address));
+      const address = await reverseGeocodeCoords(point.latitude, point.longitude);
+      setSourceInput(address || 'My Location');
       setRegion({
         ...point,
         latitudeDelta: 0.05,

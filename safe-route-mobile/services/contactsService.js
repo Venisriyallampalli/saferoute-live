@@ -2,6 +2,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiRequest } from './apiClient';
 import { CONTACTS_KEY_PREFIX } from '../utils/storageKeys';
 
+const DEFAULT_EMERGENCY_CONTACTS = [
+  {
+    id: 'default:police-100',
+    name: 'Police',
+    phone: '100',
+    relation: 'Emergency Service',
+  },
+  {
+    id: 'default:ambulance-108',
+    name: 'Ambulance',
+    phone: '108',
+    relation: 'Emergency Service',
+  },
+];
+
 function normalizePhone(phone = '') {
   return String(phone).replace(/[^+\d]/g, '').trim();
 }
@@ -37,38 +52,73 @@ function getContactsStorageKey(userId = 'anonymous') {
   return `${CONTACTS_KEY_PREFIX}:${userId}`;
 }
 
-export async function loadContacts(userId = 'anonymous') {
+async function readCachedContacts(userId = 'anonymous') {
   const key = getContactsStorageKey(userId);
-  const remote = await apiRequest('/api/contacts');
-  if (!remote?.synced) {
-    throw new Error(remote?.message || 'Contacts are not synced with server');
+  const cached = await AsyncStorage.getItem(key);
+  if (!cached) return [];
+
+  try {
+    const parsed = JSON.parse(cached);
+    return Array.isArray(parsed) ? parsed.map(normalizeContact) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function seedDefaultsIfEmpty(userId = 'anonymous', contacts = []) {
+  if (Array.isArray(contacts) && contacts.length > 0) {
+    return contacts;
   }
 
-  const contacts = Array.isArray(remote?.contacts) ? remote.contacts.map(normalizeContact) : [];
+  const key = getContactsStorageKey(userId);
+  const seeded = DEFAULT_EMERGENCY_CONTACTS.map((item) => normalizeContact(item));
+  await AsyncStorage.setItem(key, JSON.stringify(seeded));
+  return seeded;
+}
 
-  await AsyncStorage.setItem(key, JSON.stringify(contacts));
-  return contacts;
+export async function loadContacts(userId = 'anonymous') {
+  const key = getContactsStorageKey(userId);
+  const cachedContacts = await readCachedContacts(userId);
+
+  try {
+    const remote = await apiRequest('/api/contacts');
+    if (!remote?.synced) {
+      throw new Error(remote?.message || 'Contacts are not synced with server');
+    }
+
+    const contacts = Array.isArray(remote?.contacts) ? remote.contacts.map(normalizeContact) : [];
+    await AsyncStorage.setItem(key, JSON.stringify(contacts));
+
+    return contacts;
+  } catch {
+    return seedDefaultsIfEmpty(userId, cachedContacts);
+  }
 }
 
 export async function saveContacts(userId = 'anonymous', contacts = []) {
   const key = getContactsStorageKey(userId);
   const normalized = contacts.map(normalizeContact);
 
-  const remote = await apiRequest('/api/contacts/sync', {
-    method: 'POST',
-    body: JSON.stringify({ contacts: normalized }),
-  });
+  try {
+    const remote = await apiRequest('/api/contacts/sync', {
+      method: 'POST',
+      body: JSON.stringify({ contacts: normalized }),
+    });
 
-  if (!remote?.synced) {
-    throw new Error(remote?.message || 'Contacts sync failed');
+    if (!remote?.synced) {
+      throw new Error(remote?.message || 'Contacts sync failed');
+    }
+
+    const syncedContacts = Array.isArray(remote?.contacts)
+      ? remote.contacts.map(normalizeContact)
+      : normalized;
+
+    await AsyncStorage.setItem(key, JSON.stringify(syncedContacts));
+    return syncedContacts;
+  } catch {
+    await AsyncStorage.setItem(key, JSON.stringify(normalized));
+    return normalized;
   }
-
-  const syncedContacts = Array.isArray(remote?.contacts)
-    ? remote.contacts.map(normalizeContact)
-    : normalized;
-
-  await AsyncStorage.setItem(key, JSON.stringify(syncedContacts));
-  return syncedContacts;
 }
 
 export async function addContact(userId, contact, previousContacts = []) {

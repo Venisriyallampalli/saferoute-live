@@ -50,12 +50,21 @@ function normalizeWeights(weights) {
   return normalized;
 }
 
-function resolveActiveWeights({ hasCrimeData, hasTrafficData, hasWeatherData, hasHazardData }) {
+function resolveActiveWeights({
+  hasTrafficData,
+  hasWeatherData,
+  hasHazardData,
+  hasAccidentData,
+  hasCrowdData,
+  hasProtectiveData,
+}) {
   const base = {
-    crime: hasCrimeData ? 0.25 : 0,
     traffic: hasTrafficData ? 0.20 : 0.12,
     weather: hasWeatherData ? 0.15 : 0.08,
     hazard: hasHazardData ? 0.15 : 0.08,
+    accident: hasAccidentData ? 0.22 : 0.12,
+    crowd: hasCrowdData ? 0.12 : 0.05,
+    protective: hasProtectiveData ? 0.12 : 0.05,
     lighting: 0.15,
     time: 0.10,
   };
@@ -83,10 +92,12 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
   async scoreRoute(route, context = {}) {
     const now = context.now instanceof Date ? context.now : new Date();
     const night = isNightHour(now);
-    const hasCrimeData = Boolean(context.hasCrimeData);
     const hasTrafficData = route.trafficDensity != null;
     const hasWeatherData = Boolean(context.hasWeatherData);
     const hasHazardData = Boolean(context.hasHazardData);
+    const hasAccidentData = Boolean(context.hasAccidentData);
+    const hasCrowdData = Boolean(context.hasCrowdData);
+    const hasProtectiveData = Boolean(context.hasProtectiveData);
     const transportMode = normalizeTransportMode(context.transportMode || route.transportMode || route.transport_mode);
     const transportRiskAdjustment = getTransportRiskAdjustment(transportMode);
 
@@ -99,10 +110,12 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
         safety_score: 0,
         safety_label: 'High Risk',
         factors: {
-          crime: 1,
           weather: 1,
           traffic: 1,
           hazard: 1,
+          accident: 1,
+          crowd: 1,
+          protective: 1,
           lighting: 1,
           time: 1,
           transport_adjustment: transportRiskAdjustment,
@@ -121,26 +134,30 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
     let timeRisk = getTimeRisk(now);
     let lightingRisk = getLightingRisk(now);
 
-    if (!hasCrimeData && night) {
+    if (night) {
       timeRisk = Math.min(timeRisk, 0.55);
       lightingRisk = Math.min(lightingRisk, 0.45);
     }
 
     const weights = resolveActiveWeights({
-      hasCrimeData,
       hasTrafficData,
       hasWeatherData,
       hasHazardData,
+      hasAccidentData,
+      hasCrowdData,
+      hasProtectiveData,
     });
 
     const timeBucket = Math.floor(now.getTime() / (5 * 60 * 1000));
 
     const aggregate = {
       segmentSafety: 0,
-      crime: 0,
       weather: 0,
       traffic: 0,
       hazard: 0,
+      accident: 0,
+      crowd: 0,
+      protective: 0,
       lighting: 0,
       time: 0,
     };
@@ -150,9 +167,6 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
       const locationRandom = pseudoRandom01(locationSeed);
 
       const locationType = locationRandom > 0.67 ? 'isolated' : 'urban';
-      const isolatedRisk = locationType === 'isolated' ? 0.12 : 0.0;
-
-      const crimeScore = clamp01((night ? 0.6 : 0.3) + isolatedRisk);
 
       const simulatedTraffic = clamp01(
         0.25 +
@@ -177,11 +191,40 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
         hazardScore = clamp01(await context.getHazardRisk(segment.midpoint, { night, locationType, fallback: hazardScore }));
       }
 
+      let accidentRisk = clamp(pseudoRandom01(`${locationSeed}:accident:${timeBucket}`) * 0.18, 0, 0.18);
+      if (typeof context.getAccidentRisk === 'function') {
+        accidentRisk = clamp01(await context.getAccidentRisk(segment.midpoint, {
+          night,
+          locationType,
+          roadType: type,
+          fallback: accidentRisk,
+        }));
+      }
+
+      let crowdRisk = clamp(pseudoRandom01(`${locationSeed}:crowd:${timeBucket}`) * 0.2, 0, 0.2);
+      if (typeof context.getCrowdRisk === 'function') {
+        crowdRisk = clamp01(await context.getCrowdRisk(segment.midpoint, {
+          night,
+          fallback: crowdRisk,
+        }));
+      }
+
+      let protectiveScore = clamp(pseudoRandom01(`${locationSeed}:protective:${timeBucket}`) * 0.35, 0, 0.35);
+      if (typeof context.getProtectiveScore === 'function') {
+        protectiveScore = clamp01(await context.getProtectiveScore(segment.midpoint, {
+          night,
+          fallback: protectiveScore,
+        }));
+      }
+      const protectiveRisk = clamp01(1 - protectiveScore);
+
       const weightedRisk =
-        (weights.crime * crimeScore) +
         (weights.traffic * trafficRisk) +
         (weights.weather * weatherRisk) +
         (weights.hazard * hazardScore) +
+        (weights.accident * accidentRisk) +
+        (weights.crowd * crowdRisk) +
+        (weights.protective * protectiveRisk) +
         (weights.lighting * lightingRisk) +
         (weights.time * timeRisk);
 
@@ -203,18 +246,22 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
         risk_score: Number(riskScore.toFixed(3)),
         __agg: {
           segmentSafety,
-          crimeScore,
           weatherRisk,
           trafficRisk,
           hazardScore,
+          accidentRisk,
+          crowdRisk,
+          protectiveScore,
           lightingRisk,
           timeRisk,
         },
         factors: {
-          crime: Number(crimeScore.toFixed(3)),
           weather: Number(weatherRisk.toFixed(3)),
           traffic: Number(trafficRisk.toFixed(3)),
           hazard: Number(hazardScore.toFixed(3)),
+          accident: Number(accidentRisk.toFixed(3)),
+          crowd_presence: Number(crowdRisk.toFixed(3)),
+          protective: Number(protectiveScore.toFixed(3)),
           lighting: Number(lightingRisk.toFixed(3)),
           time: Number(timeRisk.toFixed(3)),
           transport_adjustment: Number(transportRiskAdjustment.toFixed(3)),
@@ -225,10 +272,12 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
     const cleanedSegmentResults = segmentResults.map((segment) => {
       const agg = segment.__agg;
       aggregate.segmentSafety += agg.segmentSafety;
-      aggregate.crime += agg.crimeScore;
       aggregate.weather += agg.weatherRisk;
       aggregate.traffic += agg.trafficRisk;
       aggregate.hazard += agg.hazardScore;
+      aggregate.accident += agg.accidentRisk;
+      aggregate.crowd += agg.crowdRisk;
+      aggregate.protective += agg.protectiveScore;
       aggregate.lighting += agg.lightingRisk;
       aggregate.time += agg.timeRisk;
 
@@ -250,10 +299,12 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
         is_night: night,
       },
       factors: {
-        crime: Number((aggregate.crime / segments.length).toFixed(3)),
         weather: Number((aggregate.weather / segments.length).toFixed(3)),
         traffic: Number((aggregate.traffic / segments.length).toFixed(3)),
         hazard: Number((aggregate.hazard / segments.length).toFixed(3)),
+        accident: Number((aggregate.accident / segments.length).toFixed(3)),
+        crowd_presence: Number((aggregate.crowd / segments.length).toFixed(3)),
+        protective: Number((aggregate.protective / segments.length).toFixed(3)),
         lighting: Number((aggregate.lighting / segments.length).toFixed(3)),
         time: Number((aggregate.time / segments.length).toFixed(3)),
         transport_adjustment: Number(transportRiskAdjustment.toFixed(3)),
