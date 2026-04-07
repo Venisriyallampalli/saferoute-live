@@ -25,5 +25,6 @@ router.post('/accidents/bulk', requireAuth, safetyController.bulkUpsertAccidents
 
 // 4. Route Safety Scoring Engine (rule-based)
 router.post('/route-score', safetyController.scoreRoutes);
+router.post('/route-monitor', safetyController.monitorRouteRisk);
 
 module.exports = router;

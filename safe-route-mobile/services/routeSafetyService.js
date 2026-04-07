@@ -116,6 +116,23 @@ export async function scoreRoutesWithBackend(routes, options = {}) {
   }
 }
 
+export async function monitorRouteRiskWithBackend(payload = {}, options = {}) {
+  const requestBody = {
+    ...payload,
+    segment_length_m: options.segmentLengthMeters || payload.segment_length_m || 120,
+  };
+
+  const response = await withTimeout(
+    apiRequestWithFallback('/api/safety/route-monitor', {
+      method: 'POST',
+      body: JSON.stringify(requestBody),
+    }),
+    options.timeoutMs || 12000
+  );
+
+  return response || {};
+}
+
 export async function computeRouteSafetyLocally(route, options = {}) {
   return computeOneRouteSafetyLocally(route, {
     segmentLengthMeters: options.segmentLengthMeters || 75,

@@ -39,6 +39,112 @@ function mapSeverityToRisk(severity = 'Medium') {
   return 0.1;
 }
 
+const REROUTE_COOLDOWN_MS = 120000;
+const ROUTE_LOAD_TTL_MS = 10 * 60 * 1000;
+const ROUTE_LOAD_WEIGHTS = [0.5, 0.3, 0.2];
+const routeLoadState = new Map();
+const userRerouteState = new Map();
+
+function cleanupMonitoringState(nowTs) {
+  for (const [key, value] of routeLoadState.entries()) {
+    if (!value || (nowTs - Number(value.updatedAt || 0)) > ROUTE_LOAD_TTL_MS) {
+      routeLoadState.delete(key);
+    }
+  }
+
+  for (const [userId, value] of userRerouteState.entries()) {
+    if (!value || (nowTs - Number(value.updatedAt || 0)) > ROUTE_LOAD_TTL_MS) {
+      userRerouteState.delete(userId);
+    }
+  }
+}
+
+function makeRouteLoadKey(routeMeta = {}, routeId = '') {
+  const coordinates = normalizeRouteCoordinates(routeMeta.coordinates);
+  if (!coordinates.length) return `route:${routeId}`;
+
+  const first = coordinates[0];
+  const middle = coordinates[Math.floor(coordinates.length / 2)];
+  const last = coordinates[coordinates.length - 1];
+  const distBucket = Math.round(Number(routeMeta.distanceMeters || 0) / 100);
+
+  return [
+    first.latitude.toFixed(3),
+    first.longitude.toFixed(3),
+    middle.latitude.toFixed(3),
+    middle.longitude.toFixed(3),
+    last.latitude.toFixed(3),
+    last.longitude.toFixed(3),
+    distBucket,
+  ].join('|');
+}
+
+function getRouteCapacity(routeMeta = {}) {
+  const distance = Number(routeMeta.distanceMeters || 0);
+  const dynamic = Math.round(distance / 90);
+  return Math.max(20, Math.min(120, dynamic || 50));
+}
+
+function isPoorWeatherSignal(route = {}) {
+  const weather = route?.weather || {};
+  const condition = String(weather.condition || '').toLowerCase();
+  const description = String(weather.description || '').toLowerCase();
+  const visibility = Number(weather.visibility_m || 10000);
+
+  const hasHeavyRain = condition.includes('rain') || description.includes('heavy rain') || Number(weather.rain_mm || 0) >= 7;
+  const hasFog = condition.includes('fog') || description.includes('fog') || description.includes('mist') || visibility < 1800;
+  const lowVisibility = visibility > 0 && visibility < 1500;
+  return hasHeavyRain || hasFog || lowVisibility;
+}
+
+function hasHardIncident(incidents = []) {
+  if (!Array.isArray(incidents)) return false;
+  return incidents.some((incident) => {
+    const iconCategory = Number(incident?.iconCategory || 0);
+    const magnitude = Number(incident?.magnitudeOfDelay || 0);
+    const description = String(incident?.description || '').toLowerCase();
+
+    if (description.includes('road closed') || description.includes('closure')) return true;
+    if (description.includes('accident') && (iconCategory >= 9 || magnitude >= 3)) return true;
+    return iconCategory >= 11;
+  });
+}
+
+function selectLoadBalancedRoute(topCandidates = [], nowTs = Date.now()) {
+  if (!topCandidates.length) return null;
+
+  const totalLoads = topCandidates.reduce((sum, item) => sum + Number(item.currentUsers || 0), 0);
+  const expectedTotalAfterAssign = totalLoads + 1;
+
+  let selected = null;
+  let bestDeficit = -Infinity;
+
+  topCandidates.forEach((item, index) => {
+    if (item.currentUsers >= item.capacity) return;
+    const weight = ROUTE_LOAD_WEIGHTS[index] ?? 0.1;
+    const desired = expectedTotalAfterAssign * weight;
+    const deficit = desired - item.currentUsers;
+
+    if (deficit > bestDeficit) {
+      bestDeficit = deficit;
+      selected = item;
+    }
+  });
+
+  if (!selected) {
+    selected = topCandidates.find((item) => item.currentUsers < item.capacity) || topCandidates[0];
+  }
+
+  if (!selected) return null;
+
+  routeLoadState.set(selected.loadKey, {
+    count: Number(selected.currentUsers || 0) + 1,
+    updatedAt: nowTs,
+  });
+
+  return selected;
+}
+
 function estimateCrowdRisk({ flowPercent = null, night = false, nearbyIncidentRisk = 0 }) {
   const normalizedFlow = Number.isFinite(Number(flowPercent))
     ? clamp01(Number(flowPercent) / 100)
@@ -854,6 +960,284 @@ exports.scoreRoutes = async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       message: 'Failed to score routes',
+      error: error.message,
+    });
+  }
+};
+
+function runScoreRoutesViaController(body) {
+  return new Promise((resolve, reject) => {
+    const req = { body };
+    const responder = {
+      statusCode: 200,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        if (this.statusCode >= 400) {
+          reject(new Error(payload?.message || 'Failed to score routes'));
+          return payload;
+        }
+
+        resolve(payload);
+        return payload;
+      },
+    };
+
+    exports.scoreRoutes(req, responder).catch((error) => reject(error));
+  });
+}
+
+/**
+ * Monitor active route risk and determine reroute recommendation.
+ */
+exports.monitorRouteRisk = async (req, res) => {
+  try {
+    const {
+      routes,
+      current_route_id: currentRouteId,
+      current_position: currentPosition,
+      user_id: userIdInput,
+      previous_safety_score: previousSafetyScore,
+      segment_length_m: segmentLengthMeters,
+      transport_mode: transportMode,
+      now,
+    } = req.body || {};
+
+    if (!Array.isArray(routes) || !routes.length) {
+      return res.status(400).json({ message: 'routes array is required' });
+    }
+
+    if (!currentRouteId) {
+      return res.status(400).json({ message: 'current_route_id is required' });
+    }
+
+    const nowDate = now ? new Date(now) : new Date();
+    const nowTs = nowDate.getTime();
+    if (Number.isNaN(nowTs)) {
+      return res.status(400).json({ message: 'Invalid now timestamp' });
+    }
+
+    cleanupMonitoringState(nowTs);
+
+    const userId = String(userIdInput || req.user?._id || req.user?.id || 'anonymous');
+    const userState = userRerouteState.get(userId) || { lastRerouteAt: 0, updatedAt: 0 };
+    const cooldownRemainingMs = Math.max(0, REROUTE_COOLDOWN_MS - (nowTs - Number(userState.lastRerouteAt || 0)));
+
+    const scorePayload = {
+      routes,
+      transport_mode: transportMode,
+      segment_length_m: segmentLengthMeters || 120,
+      now: nowDate.toISOString(),
+    };
+
+    const scoreResult = await runScoreRoutesViaController(scorePayload);
+    const scoredRoutes = Array.isArray(scoreResult?.routes) ? scoreResult.routes : [];
+    const routeMetaById = new Map((routes || []).map((item, idx) => {
+      const routeId = item?.route_id || item?.id || `route-${idx}`;
+      return [routeId, item];
+    }));
+
+    const currentRoute = scoredRoutes.find((item) => item.route_id === currentRouteId) || scoredRoutes[0];
+    if (!currentRoute) {
+      return res.status(400).json({ message: 'Unable to resolve current route from scored results' });
+    }
+
+    const incidentProbePoint = {
+      latitude: Number(currentPosition?.latitude),
+      longitude: Number(currentPosition?.longitude),
+    };
+
+    const canProbeIncidents = Number.isFinite(incidentProbePoint.latitude) && Number.isFinite(incidentProbePoint.longitude);
+    const liveIncidents = canProbeIncidents
+      ? await getLiveIncidentsNearPoint({
+          latitude: incidentProbePoint.latitude,
+          longitude: incidentProbePoint.longitude,
+          radiusKm: 2,
+        }).catch(() => [])
+      : [];
+
+    const upcomingHazards = canProbeIncidents
+      ? await Hazard.find({
+          location: {
+            $near: {
+              $geometry: {
+                type: 'Point',
+                coordinates: [incidentProbePoint.longitude, incidentProbePoint.latitude],
+              },
+              $maxDistance: 600,
+            },
+          },
+          isActive: true,
+        }).limit(20)
+      : [];
+
+    const currentSafetyScore = Number(currentRoute?.safety_score || 0);
+    const previousScore = Number(previousSafetyScore || currentSafetyScore || 0);
+    const safetyDropPercent = previousScore > 0
+      ? ((previousScore - currentSafetyScore) / previousScore) * 100
+      : 0;
+
+    const currentFlowPercent = Number(currentRoute?.crowd_meta?.traffic_flow_percent ?? 45);
+    const currentTrafficDensity = clamp01(1 - (currentFlowPercent / 100));
+
+    const scoredWithMeta = scoredRoutes.map((route) => {
+      const flowPercent = Number(route?.crowd_meta?.traffic_flow_percent ?? 45);
+      const trafficDensity = clamp01(1 - (flowPercent / 100));
+      return {
+        route,
+        routeId: route.route_id,
+        trafficDensity,
+        safetyScore: Number(route?.safety_score || 0),
+      };
+    });
+
+    const alternatives = scoredWithMeta
+      .filter((item) => item.routeId !== currentRoute.route_id)
+      .sort((a, b) => b.safetyScore - a.safetyScore);
+
+    const bestAlternative = alternatives[0] || null;
+    const bestAltDensity = bestAlternative ? bestAlternative.trafficDensity : currentTrafficDensity;
+    const bestAltScore = bestAlternative ? bestAlternative.safetyScore : currentSafetyScore;
+
+    const upcomingSegments = Array.isArray(currentRoute?.segments) ? currentRoute.segments.slice(0, 6) : [];
+    const hazardHeavySegments = upcomingSegments.filter((segment) => Number(segment?.factors?.hazard || 0) >= 0.35).length;
+
+    const hardTriggerReasons = [];
+    if (hasHardIncident(liveIncidents)) {
+      hardTriggerReasons.push('road closure or major accident detected');
+    }
+
+    if (upcomingHazards.some((hazard) => ['flooding', 'obstruction', 'construction'].includes(String(hazard?.type || '').toLowerCase()))) {
+      hardTriggerReasons.push('critical road hazard ahead (flooding/obstruction/construction)');
+    }
+
+    const softTriggerReasons = [];
+    if (currentTrafficDensity > 0.75 && (bestAltDensity <= (currentTrafficDensity - 0.2))) {
+      softTriggerReasons.push('high congestion with significantly less-congested alternative');
+    }
+
+    if (safetyDropPercent > 15) {
+      softTriggerReasons.push('safety score dropped by more than 15%');
+    }
+
+    if (hazardHeavySegments >= 3 || upcomingHazards.length >= 3) {
+      softTriggerReasons.push('multiple hazards reported in upcoming segments');
+    }
+
+    if (isPoorWeatherSignal(currentRoute)) {
+      softTriggerReasons.push('poor weather conditions (heavy rain/fog/low visibility)');
+    }
+
+    const hardTriggered = hardTriggerReasons.length > 0;
+    const softTriggered = softTriggerReasons.length > 0;
+
+    const rankedRouteIds = Array.isArray(scoreResult?.route_selection?.ranked_route_ids) && scoreResult.route_selection.ranked_route_ids.length
+      ? scoreResult.route_selection.ranked_route_ids
+      : scoredWithMeta
+          .sort((a, b) => b.safetyScore - a.safetyScore)
+          .map((item) => item.routeId);
+
+    const topCandidates = rankedRouteIds.slice(0, 3).map((routeId, index) => {
+      const scoredItem = scoredWithMeta.find((item) => item.routeId === routeId);
+      if (!scoredItem) return null;
+
+      const routeMeta = routeMetaById.get(routeId) || {};
+      const loadKey = makeRouteLoadKey(routeMeta, routeId);
+      const routeLoad = routeLoadState.get(loadKey);
+      const currentUsers = Number(routeLoad?.count || 0);
+      const capacity = getRouteCapacity(routeMeta);
+      const weight = ROUTE_LOAD_WEIGHTS[index] ?? 0.1;
+
+      return {
+        routeId,
+        loadKey,
+        currentUsers,
+        capacity,
+        weight,
+        safetyScore: scoredItem.safetyScore,
+        trafficDensity: scoredItem.trafficDensity,
+      };
+    }).filter(Boolean);
+
+    const rerouteTriggered = hardTriggered || (softTriggered && cooldownRemainingMs === 0);
+    const recommendedCandidate = rerouteTriggered
+      ? selectLoadBalancedRoute(topCandidates, nowTs)
+      : null;
+
+    const recommendedRouteId = recommendedCandidate?.routeId || scoreResult?.route_selection?.recommended_route_id || rankedRouteIds[0] || currentRoute.route_id;
+    const recommendedRouteIndex = routes.findIndex((item, idx) => {
+      const routeId = item?.route_id || item?.id || `route-${idx}`;
+      return routeId === recommendedRouteId;
+    });
+
+    const safetyImprovementPercent = currentSafetyScore > 0
+      ? Math.max(0, ((bestAltScore - currentSafetyScore) / currentSafetyScore) * 100)
+      : 0;
+
+    if (rerouteTriggered) {
+      userRerouteState.set(userId, {
+        lastRerouteAt: nowTs,
+        updatedAt: nowTs,
+      });
+    } else {
+      userRerouteState.set(userId, {
+        ...userState,
+        updatedAt: nowTs,
+      });
+    }
+
+    return res.json({
+      monitored_at: nowDate.toISOString(),
+      poll_interval_seconds: 12,
+      cooldown_ms: REROUTE_COOLDOWN_MS,
+      cooldown_remaining_ms: cooldownRemainingMs,
+      current_route_id: currentRoute.route_id,
+      current_route_safety_score: Number(currentSafetyScore.toFixed(2)),
+      current_traffic_density: Number(currentTrafficDensity.toFixed(3)),
+      safety_drop_percent: Number(safetyDropPercent.toFixed(2)),
+      hard_triggers: hardTriggerReasons,
+      soft_triggers: softTriggerReasons,
+      reroute: {
+        triggered: rerouteTriggered,
+        hard: hardTriggered,
+        auto_apply: hardTriggered,
+        reason: hardTriggered ? hardTriggerReasons[0] : softTriggerReasons[0] || null,
+        recommended_route_id: recommendedRouteId,
+        recommended_route_index: recommendedRouteIndex >= 0 ? recommendedRouteIndex : 0,
+        safety_improvement_percent: Number(safetyImprovementPercent.toFixed(2)),
+      },
+      load_balancing: {
+        distribution_target: {
+          route_1: '50%',
+          route_2: '30%',
+          route_3: '20%',
+        },
+        routes: topCandidates.map((item) => ({
+          route_id: item.routeId,
+          current_users: item.currentUsers,
+          capacity: item.capacity,
+          assigned_weight: item.weight,
+          traffic_density: Number(item.trafficDensity.toFixed(3)),
+          safety_score: Number(item.safetyScore.toFixed(2)),
+        })),
+      },
+      context_snapshots: {
+        incidents_count: liveIncidents.length,
+        hazards_ahead_count: upcomingHazards.length,
+        weather: currentRoute?.weather || null,
+      },
+      routes: scoredRoutes,
+      route_selection: scoreResult?.route_selection || {
+        strategy: 'monitoring-fallback',
+        recommended_route_id: recommendedRouteId,
+        ranked_route_ids: rankedRouteIds,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Failed to monitor route risk',
       error: error.message,
     });
   }

@@ -14,7 +14,12 @@ import { MAPBOX_TOKEN } from '../utils/config';
 import { calculateSafetyScore, getSafetyLabel } from '../utils/safetyScore';
 import { fetchRoute, geocodeDestination, getMockSafetyMarkers, fetchPlaceSuggestions } from '../services/navigationService';
 import { loadHazardReports } from '../services/hazardService';
-import { scoreRoutesWithBackend, getDynamicRescoreKey, getSegmentColorBySafety } from '../services/routeSafetyService';
+import {
+  scoreRoutesWithBackend,
+  getDynamicRescoreKey,
+  getSegmentColorBySafety,
+  monitorRouteRiskWithBackend,
+} from '../services/routeSafetyService';
 import { useAuth } from '../context/AuthContext';
 import { createSosPayload, sendSosAlert } from '../services/sosService';
 import { loadContacts } from '../services/contactsService';
@@ -69,6 +74,9 @@ export default function MapScreen({ route, navigation }) {
   const lastDynamicKeyRef = useRef('');
   const lastRerouteAtRef = useRef(0);
   const lastRouteSignatureRef = useRef('');
+  const reroutePromptOpenRef = useRef(false);
+  const ignoredRerouteUntilRef = useRef(0);
+  const lastObservedSafetyRef = useRef(0);
 
   const getTransportModeLabel = (mode) => {
     const normalized = String(mode || '').toLowerCase();
@@ -79,68 +87,14 @@ export default function MapScreen({ route, navigation }) {
     return 'Car';
   };
 
-  const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
-
-  const estimateRouteTrafficBase = (routeItem) => {
-    if (routeItem?.trafficDensity != null) return clamp01(routeItem.trafficDensity);
-
-    const speedMps = routeItem?.durationSeconds > 0
-      ? (routeItem.distanceMeters || 0) / routeItem.durationSeconds
-      : 8;
-
-    if (speedMps >= 16) return 0.35;
-    if (speedMps >= 11) return 0.5;
-    if (speedMps >= 7) return 0.62;
-    return 0.75;
-  };
-
-  const averageUpcomingTraffic = (segments = [], routeItem = null, fromIndex = 0, lookahead = 4) => {
-    const window = segments.slice(fromIndex, fromIndex + lookahead);
-    if (!window.length) {
-      return estimateRouteTrafficBase(routeItem);
-    }
-
-    const total = window.reduce((sum, segment) => {
-      const segmentTraffic = segment?.factors?.traffic;
-      if (segmentTraffic == null) {
-        return sum + estimateRouteTrafficBase(routeItem);
-      }
-      return sum + clamp01(segmentTraffic);
-    }, 0);
-
-    return clamp01(total / window.length);
-  };
-
-  const getNearestSegmentIndex = (position, segments = []) => {
-    if (!position || !segments.length) return 0;
-
-    let nearestIndex = 0;
-    let nearestDistance = Infinity;
-
-    for (let i = 0; i < segments.length; i += 1) {
-      const midpoint = segments[i]?.midpoint;
-      if (!midpoint) continue;
-
-      const latDiff = midpoint.latitude - position.latitude;
-      const lonDiff = midpoint.longitude - position.longitude;
-      const distanceSq = (latDiff * latDiff) + (lonDiff * lonDiff);
-
-      if (distanceSq < nearestDistance) {
-        nearestDistance = distanceSq;
-        nearestIndex = i;
-      }
-    }
-
-    return nearestIndex;
-  };
-
-  const averageUpcomingSafety = (segments = [], fromIndex = 0, lookahead = 4) => {
-    const window = segments.slice(fromIndex, fromIndex + lookahead);
-    if (!window.length) return 100;
-
-    const total = window.reduce((sum, segment) => sum + Number(segment?.safety_score || 0), 0);
-    return total / window.length;
-  };
+  const toMonitorPayloadRoutes = (routesInput = []) => routesInput.map((item, index) => ({
+    route_id: item?.id || item?.route_id || `route-${index}`,
+    coordinates: item?.coordinates || [],
+    distanceMeters: item?.distanceMeters || 0,
+    durationSeconds: item?.durationSeconds || 0,
+    trafficDensity: item?.trafficDensity,
+    transport_mode: item?.transport_mode || item?.transportMode || transportMode || 'car',
+  }));
 
   const refreshRouteScores = async (routes, options = {}) => {
     if (!Array.isArray(routes) || !routes.length) {
@@ -323,104 +277,188 @@ export default function MapScreen({ route, navigation }) {
   }, [allRoutes, lastScoreUpdateAt]);
 
   useEffect(() => {
-    if (!isNavigating || !origin || !allRoutes.length || isRerouting) {
+    const active = allRoutes[selectedRouteIndex];
+    if (!active) return;
+
+    const score = Number(routeScoresById?.[active.id]?.safety_score || 0);
+    if (Number.isFinite(score) && score > 0) {
+      lastObservedSafetyRef.current = score;
+    }
+  }, [allRoutes, selectedRouteIndex, routeScoresById]);
+
+  useEffect(() => {
+    if (!isNavigating || !origin || !allRoutes.length) {
       return;
     }
 
-    const activeRoute = allRoutes[selectedRouteIndex];
-    const activeScore = routeScoresById[activeRoute?.id];
-    const activeSegments = activeScore?.segments || [];
+    let isCancelled = false;
+    let inFlight = false;
 
-    if (activeSegments.length < 3) {
-      return;
-    }
+    const monitorRouteRisk = async () => {
+      if (inFlight || isCancelled) return;
+      if (isRerouting) return;
 
-    const activeCurrentSegmentIndex = getNearestSegmentIndex(origin, activeSegments);
-    const upcomingSafety = averageUpcomingSafety(activeSegments, activeCurrentSegmentIndex + 1, 4);
+      inFlight = true;
+      try {
+        const activeRoute = allRoutes[selectedRouteIndex];
+        if (!activeRoute) return;
 
-    if (upcomingSafety >= 58) {
-      return;
-    }
-
-    const nowTs = Date.now();
-    if (nowTs - lastRerouteAtRef.current < 120000) {
-      return;
-    }
-
-    const activeUpcomingTraffic = averageUpcomingTraffic(
-      activeSegments,
-      activeRoute,
-      activeCurrentSegmentIndex + 1,
-      4
-    );
-    const activeRouteScore = Number(activeScore?.safety_score || 0);
-
-    let bestAlternative = null;
-
-    allRoutes.forEach((candidateRoute, idx) => {
-      if (idx === selectedRouteIndex) return;
-
-      const candidateScore = routeScoresById[candidateRoute.id];
-      const candidateSegments = candidateScore?.segments || [];
-      if (candidateSegments.length < 3) return;
-
-      const candidateCurrentSegmentIndex = getNearestSegmentIndex(origin, candidateSegments);
-      const candidateUpcoming = averageUpcomingSafety(candidateSegments, candidateCurrentSegmentIndex + 1, 4);
-      const candidateUpcomingTraffic = averageUpcomingTraffic(
-        candidateSegments,
-        candidateRoute,
-        candidateCurrentSegmentIndex + 1,
-        4
-      );
-      const candidateRouteScore = Number(candidateScore?.safety_score || 0);
-
-      const saferUpcoming = candidateUpcoming >= upcomingSafety + 12;
-      const saferOverall = candidateRouteScore >= activeRouteScore + 6;
-      const congestionAcceptable =
-        candidateUpcomingTraffic <= (activeUpcomingTraffic + 0.08) &&
-        candidateUpcomingTraffic <= 0.8;
-
-      if (!saferUpcoming || !saferOverall || !congestionAcceptable) {
-        return;
-      }
-
-      if (!bestAlternative || candidateRouteScore > bestAlternative.routeScore) {
-        bestAlternative = {
-          index: idx,
-          routeScore: candidateRouteScore,
+        const monitorPayload = {
+          user_id: userId,
+          current_route_id: activeRoute.id,
+          current_position: origin,
+          previous_safety_score: lastObservedSafetyRef.current || Number(routeScoresById?.[activeRoute.id]?.safety_score || 0),
+          transport_mode: activeRoute.transportMode || transportMode || 'car',
+          segment_length_m: 120,
+          routes: toMonitorPayloadRoutes(allRoutes),
+          now: new Date().toISOString(),
         };
+
+        const monitorResponse = await monitorRouteRiskWithBackend(monitorPayload, {
+          timeoutMs: 12000,
+          segmentLengthMeters: 120,
+        });
+
+        if (isCancelled) return;
+
+        if (Array.isArray(monitorResponse?.routes) && monitorResponse.routes.length) {
+          const scoreMap = {};
+          monitorResponse.routes.forEach((item) => {
+            scoreMap[item.route_id] = item;
+          });
+          setRouteScoresById(scoreMap);
+          setLastScoreUpdateAt(new Date().toISOString());
+        }
+
+        const reroute = monitorResponse?.reroute || {};
+        if (!reroute.triggered) return;
+
+        const nowTs = Date.now();
+        if (!reroute.hard) {
+          if (nowTs < ignoredRerouteUntilRef.current) return;
+          if (reroutePromptOpenRef.current) return;
+          if (nowTs - lastRerouteAtRef.current < 120000) return;
+        }
+
+        const applyReroute = async () => {
+          setIsRerouting(true);
+          try {
+            const startPoint = source || origin;
+            if (!startPoint || !destination) {
+              return;
+            }
+
+            const freshRoutes = await fetchRoute(startPoint, destination, transportMode || 'car');
+            if (!Array.isArray(freshRoutes) || !freshRoutes.length) {
+              return;
+            }
+
+            setAllRoutes(freshRoutes);
+
+            const freshMonitorPayload = {
+              ...monitorPayload,
+              routes: toMonitorPayloadRoutes(freshRoutes),
+              current_route_id: freshRoutes[0]?.id || 'route-0',
+              previous_safety_score: Number(monitorResponse?.current_route_safety_score || lastObservedSafetyRef.current || 0),
+              now: new Date().toISOString(),
+            };
+
+            const freshDecision = await monitorRouteRiskWithBackend(freshMonitorPayload, {
+              timeoutMs: 12000,
+              segmentLengthMeters: 120,
+            }).catch(() => monitorResponse);
+
+            if (Array.isArray(freshDecision?.routes) && freshDecision.routes.length) {
+              const map = {};
+              freshDecision.routes.forEach((item) => {
+                map[item.route_id] = item;
+              });
+              setRouteScoresById(map);
+            }
+
+            const recommendedIndex = Number(freshDecision?.reroute?.recommended_route_index ?? 0);
+            const safeIndex = Number.isFinite(recommendedIndex) && recommendedIndex >= 0 && recommendedIndex < freshRoutes.length
+              ? recommendedIndex
+              : 0;
+
+            setSelectedRouteIndex(safeIndex);
+            lastRerouteAtRef.current = Date.now();
+
+            const nextRoute = freshRoutes[safeIndex];
+            if (nextRoute?.coordinates?.length && mapRef.current) {
+              mapRef.current.fitToCoordinates(nextRoute.coordinates, {
+                edgePadding: { top: 120, right: 60, bottom: 180, left: 60 },
+                animated: true,
+              });
+            }
+
+            const improvement = Number(freshDecision?.reroute?.safety_improvement_percent || 0).toFixed(1);
+            if (reroute.hard) {
+              Alert.alert('Critical risk detected', `Immediate reroute applied due to: ${freshDecision?.reroute?.reason || 'hard trigger'}.`);
+            } else {
+              Alert.alert('Route updated', `Safer route applied (+${improvement}% safety improvement).`);
+            }
+          } finally {
+            setTimeout(() => {
+              setIsRerouting(false);
+            }, 800);
+          }
+        };
+
+        if (reroute.hard) {
+          await applyReroute();
+          return;
+        }
+
+        const improvement = Number(reroute.safety_improvement_percent || 0).toFixed(1);
+        reroutePromptOpenRef.current = true;
+
+        Alert.alert(
+          'Safer route available',
+          `Safer route available (+${improvement}% safety improvement).`,
+          [
+            {
+              text: 'Ignore',
+              style: 'cancel',
+              onPress: () => {
+                ignoredRerouteUntilRef.current = Date.now() + 120000;
+                reroutePromptOpenRef.current = false;
+              },
+            },
+            {
+              text: 'Accept',
+              onPress: async () => {
+                reroutePromptOpenRef.current = false;
+                await applyReroute();
+              },
+            },
+          ]
+        );
+      } catch (error) {
+        // Keep navigation stable on monitor errors.
+      } finally {
+        inFlight = false;
       }
-    });
+    };
 
-    if (!bestAlternative) {
-      return;
-    }
+    monitorRouteRisk();
+    const intervalId = setInterval(monitorRouteRisk, 12000);
 
-    setIsRerouting(true);
-    setSelectedRouteIndex(bestAlternative.index);
-    lastRerouteAtRef.current = Date.now();
-
-    const nextRoute = allRoutes[bestAlternative.index];
-    if (nextRoute?.coordinates?.length && mapRef.current) {
-      mapRef.current.fitToCoordinates(nextRoute.coordinates, {
-        edgePadding: { top: 120, right: 60, bottom: 180, left: 60 },
-        animated: true,
-      });
-    }
-
-    Alert.alert('Safer reroute applied', 'Upcoming segments looked unsafe. Switched to a safer alternative with similar traffic load.');
-
-    const timer = setTimeout(() => {
-      setIsRerouting(false);
-      clearTimeout(timer);
-    }, 2000);
+    return () => {
+      isCancelled = true;
+      clearInterval(intervalId);
+    };
   }, [
     isNavigating,
     origin,
+    source,
+    destination,
     allRoutes,
     selectedRouteIndex,
     routeScoresById,
     isRerouting,
+    userId,
+    transportMode,
   ]);
 
   const safetyScore = useMemo(() => {
