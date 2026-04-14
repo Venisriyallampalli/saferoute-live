@@ -43,7 +43,7 @@ function normalizeWeights(weights) {
   return normalized;
 }
 
-function resolveActiveWeights({ hasTrafficData, hasWeatherData, hasHazardData }) {
+function resolveBaselineImportance({ hasTrafficData, hasWeatherData, hasHazardData }) {
   const base = {
     traffic: hasTrafficData ? 0.20 : 0.12,
     weather: hasWeatherData ? 0.15 : 0.08,
@@ -53,6 +53,31 @@ function resolveActiveWeights({ hasTrafficData, hasWeatherData, hasHazardData })
   };
 
   return normalizeWeights(base);
+}
+
+function computeDarwoWeights({ baselineImportance = {}, availability = {} }) {
+  const keys = Object.keys(baselineImportance);
+  if (!keys.length) return {};
+
+  let denominator = 0;
+  const weightedTerms = {};
+  keys.forEach((key) => {
+    const lambda = Math.max(0, Number(baselineImportance[key]) || 0);
+    const availabilityValue = clamp01(Number(availability[key]) || 0);
+    const term = lambda * availabilityValue;
+    weightedTerms[key] = term;
+    denominator += term;
+  });
+
+  if (denominator <= 1e-9) {
+    return normalizeWeights(baselineImportance);
+  }
+
+  const dynamic = {};
+  keys.forEach((key) => {
+    dynamic[key] = weightedTerms[key] / denominator;
+  });
+  return dynamic;
 }
 
 function normalizeTransportMode(mode) {
@@ -144,11 +169,19 @@ export async function computeRouteSafetyLocally(route, options = {}) {
     lightingRisk = Math.min(lightingRisk, 0.45);
   }
 
-  const weights = resolveActiveWeights({
+  const baselineImportance = resolveBaselineImportance({
     hasTrafficData,
     hasWeatherData,
     hasHazardData,
   });
+
+  const dynamicWeightTotals = {
+    traffic: 0,
+    weather: 0,
+    hazard: 0,
+    lighting: 0,
+    time: 0,
+  };
 
   const totals = {
     segmentSafety: 0,
@@ -176,12 +209,25 @@ export async function computeRouteSafetyLocally(route, options = {}) {
           night,
         });
 
+    const availability = {
+      traffic: hasTrafficData ? clamp01(0.35 + trafficRisk) : 0.12,
+      weather: hasWeatherData ? clamp01(0.25 + weatherRisk) : 0.08,
+      hazard: hasHazardData ? clamp01(0.2 + hazardRisk) : 0.08,
+      lighting: clamp01(0.25 + lightingRisk),
+      time: clamp01(0.25 + timeRisk),
+    };
+
+    const segmentWeights = computeDarwoWeights({
+      baselineImportance,
+      availability,
+    });
+
     const weightedRisk = clamp01(
-      (weights.traffic * trafficRisk) +
-      (weights.weather * weatherRisk) +
-      (weights.hazard * hazardRisk) +
-      (weights.lighting * lightingRisk) +
-      (weights.time * timeRisk)
+      (segmentWeights.traffic * trafficRisk) +
+      (segmentWeights.weather * weatherRisk) +
+      (segmentWeights.hazard * hazardRisk) +
+      (segmentWeights.lighting * lightingRisk) +
+      (segmentWeights.time * timeRisk)
     );
 
     const favorableBonus =
@@ -207,6 +253,13 @@ export async function computeRouteSafetyLocally(route, options = {}) {
         lighting: Number(lightingRisk.toFixed(3)),
         time: Number(timeRisk.toFixed(3)),
         transport_adjustment: Number(transportRiskAdjustment.toFixed(3)),
+        darwo_weights: {
+          traffic: Number((segmentWeights.traffic || 0).toFixed(4)),
+          weather: Number((segmentWeights.weather || 0).toFixed(4)),
+          hazard: Number((segmentWeights.hazard || 0).toFixed(4)),
+          lighting: Number((segmentWeights.lighting || 0).toFixed(4)),
+          time: Number((segmentWeights.time || 0).toFixed(4)),
+        },
       },
       __agg: {
         segmentSafety,
@@ -215,6 +268,7 @@ export async function computeRouteSafetyLocally(route, options = {}) {
         hazardRisk,
         lightingRisk,
         timeRisk,
+        weights: segmentWeights,
       },
     };
   }));
@@ -227,6 +281,11 @@ export async function computeRouteSafetyLocally(route, options = {}) {
     totals.hazard += agg.hazardRisk;
     totals.lighting += agg.lightingRisk;
     totals.time += agg.timeRisk;
+    dynamicWeightTotals.traffic += Number(agg.weights?.traffic || 0);
+    dynamicWeightTotals.weather += Number(agg.weights?.weather || 0);
+    dynamicWeightTotals.hazard += Number(agg.weights?.hazard || 0);
+    dynamicWeightTotals.lighting += Number(agg.weights?.lighting || 0);
+    dynamicWeightTotals.time += Number(agg.weights?.time || 0);
 
     const { __agg, ...publicSegment } = segment;
     return publicSegment;
@@ -252,6 +311,24 @@ export async function computeRouteSafetyLocally(route, options = {}) {
       lighting: Number((totals.lighting / segmentCount).toFixed(3)),
       time: Number((totals.time / segmentCount).toFixed(3)),
       transport_adjustment: Number(transportRiskAdjustment.toFixed(3)),
+    },
+    darwo: {
+      enabled: true,
+      formula: 'w_i(t) = (lambda_i * availability_i(t)) / sum(lambda_j * availability_j(t))',
+      baseline_importance: {
+        traffic: Number((baselineImportance.traffic || 0).toFixed(4)),
+        weather: Number((baselineImportance.weather || 0).toFixed(4)),
+        hazard: Number((baselineImportance.hazard || 0).toFixed(4)),
+        lighting: Number((baselineImportance.lighting || 0).toFixed(4)),
+        time: Number((baselineImportance.time || 0).toFixed(4)),
+      },
+      avg_dynamic_weights: {
+        traffic: Number((dynamicWeightTotals.traffic / segmentCount).toFixed(4)),
+        weather: Number((dynamicWeightTotals.weather / segmentCount).toFixed(4)),
+        hazard: Number((dynamicWeightTotals.hazard / segmentCount).toFixed(4)),
+        lighting: Number((dynamicWeightTotals.lighting / segmentCount).toFixed(4)),
+        time: Number((dynamicWeightTotals.time / segmentCount).toFixed(4)),
+      },
     },
     segment_count: segmentCount,
     segments: cleanedSegmentResults,

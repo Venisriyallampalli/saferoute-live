@@ -50,7 +50,7 @@ function normalizeWeights(weights) {
   return normalized;
 }
 
-function resolveActiveWeights({
+function resolveBaselineImportance({
   hasTrafficData,
   hasWeatherData,
   hasHazardData,
@@ -70,6 +70,34 @@ function resolveActiveWeights({
   };
 
   return normalizeWeights(base);
+}
+
+function computeDarwoWeights({ baselineImportance = {}, availability = {} }) {
+  const keys = Object.keys(baselineImportance);
+  if (!keys.length) return {};
+
+  const epsilon = 1e-9;
+  const weightedTerms = {};
+
+  let denominator = 0;
+  keys.forEach((key) => {
+    const lambda = Math.max(0, Number(baselineImportance[key]) || 0);
+    const availabilityValue = clamp01(Number(availability[key]) || 0);
+    const term = lambda * availabilityValue;
+    weightedTerms[key] = term;
+    denominator += term;
+  });
+
+  if (denominator <= epsilon) {
+    return normalizeWeights(baselineImportance);
+  }
+
+  const dynamicWeights = {};
+  keys.forEach((key) => {
+    dynamicWeights[key] = weightedTerms[key] / denominator;
+  });
+
+  return dynamicWeights;
 }
 
 function normalizeTransportMode(mode) {
@@ -139,7 +167,7 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
       lightingRisk = Math.min(lightingRisk, 0.45);
     }
 
-    const weights = resolveActiveWeights({
+    const baselineImportance = resolveBaselineImportance({
       hasTrafficData,
       hasWeatherData,
       hasHazardData,
@@ -218,15 +246,32 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
       }
       const protectiveRisk = clamp01(1 - protectiveScore);
 
+      // DARWO: adaptive weights per segment based on baseline importance and real-time factor availability/activity.
+      const availability = {
+        traffic: hasTrafficData ? clamp01(0.35 + trafficDensity) : 0.12,
+        weather: hasWeatherData ? clamp01(0.25 + weatherRisk) : 0.08,
+        hazard: hasHazardData ? clamp01(0.2 + hazardScore) : 0.08,
+        accident: hasAccidentData ? clamp01(0.2 + accidentRisk) : 0.08,
+        crowd: hasCrowdData ? clamp01(0.2 + crowdRisk) : 0.08,
+        protective: hasProtectiveData ? clamp01(0.2 + protectiveScore) : 0.08,
+        lighting: clamp01(0.25 + lightingRisk),
+        time: clamp01(0.25 + timeRisk),
+      };
+
+      const segmentWeights = computeDarwoWeights({
+        baselineImportance,
+        availability,
+      });
+
       const weightedRisk =
-        (weights.traffic * trafficRisk) +
-        (weights.weather * weatherRisk) +
-        (weights.hazard * hazardScore) +
-        (weights.accident * accidentRisk) +
-        (weights.crowd * crowdRisk) +
-        (weights.protective * protectiveRisk) +
-        (weights.lighting * lightingRisk) +
-        (weights.time * timeRisk);
+        (segmentWeights.traffic * trafficRisk) +
+        (segmentWeights.weather * weatherRisk) +
+        (segmentWeights.hazard * hazardScore) +
+        (segmentWeights.accident * accidentRisk) +
+        (segmentWeights.crowd * crowdRisk) +
+        (segmentWeights.protective * protectiveRisk) +
+        (segmentWeights.lighting * lightingRisk) +
+        (segmentWeights.time * timeRisk);
 
       const favorableBonus =
         (weatherRisk <= 0.25 ? 0.05 : 0) +
@@ -265,12 +310,35 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
           lighting: Number(lightingRisk.toFixed(3)),
           time: Number(timeRisk.toFixed(3)),
           transport_adjustment: Number(transportRiskAdjustment.toFixed(3)),
+          darwo_weights: {
+            traffic: Number((segmentWeights.traffic || 0).toFixed(4)),
+            weather: Number((segmentWeights.weather || 0).toFixed(4)),
+            hazard: Number((segmentWeights.hazard || 0).toFixed(4)),
+            accident: Number((segmentWeights.accident || 0).toFixed(4)),
+            crowd_presence: Number((segmentWeights.crowd || 0).toFixed(4)),
+            protective: Number((segmentWeights.protective || 0).toFixed(4)),
+            lighting: Number((segmentWeights.lighting || 0).toFixed(4)),
+            time: Number((segmentWeights.time || 0).toFixed(4)),
+          },
         },
+        __weights: segmentWeights,
       };
     }));
 
+    const dynamicWeightTotals = {
+      traffic: 0,
+      weather: 0,
+      hazard: 0,
+      accident: 0,
+      crowd: 0,
+      protective: 0,
+      lighting: 0,
+      time: 0,
+    };
+
     const cleanedSegmentResults = segmentResults.map((segment) => {
       const agg = segment.__agg;
+      const dynWeights = segment.__weights || {};
       aggregate.segmentSafety += agg.segmentSafety;
       aggregate.weather += agg.weatherRisk;
       aggregate.traffic += agg.trafficRisk;
@@ -280,8 +348,16 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
       aggregate.protective += agg.protectiveScore;
       aggregate.lighting += agg.lightingRisk;
       aggregate.time += agg.timeRisk;
+      dynamicWeightTotals.traffic += Number(dynWeights.traffic || 0);
+      dynamicWeightTotals.weather += Number(dynWeights.weather || 0);
+      dynamicWeightTotals.hazard += Number(dynWeights.hazard || 0);
+      dynamicWeightTotals.accident += Number(dynWeights.accident || 0);
+      dynamicWeightTotals.crowd += Number(dynWeights.crowd || 0);
+      dynamicWeightTotals.protective += Number(dynWeights.protective || 0);
+      dynamicWeightTotals.lighting += Number(dynWeights.lighting || 0);
+      dynamicWeightTotals.time += Number(dynWeights.time || 0);
 
-      const { __agg, ...publicSegment } = segment;
+      const { __agg, __weights, ...publicSegment } = segment;
       return publicSegment;
     });
 
@@ -308,6 +384,30 @@ class RuleBasedSafetyScorer extends BaseSafetyScorer {
         lighting: Number((aggregate.lighting / segments.length).toFixed(3)),
         time: Number((aggregate.time / segments.length).toFixed(3)),
         transport_adjustment: Number(transportRiskAdjustment.toFixed(3)),
+      },
+      darwo: {
+        enabled: true,
+        formula: 'w_i(t) = (lambda_i * availability_i(t)) / sum(lambda_j * availability_j(t))',
+        baseline_importance: {
+          traffic: Number((baselineImportance.traffic || 0).toFixed(4)),
+          weather: Number((baselineImportance.weather || 0).toFixed(4)),
+          hazard: Number((baselineImportance.hazard || 0).toFixed(4)),
+          accident: Number((baselineImportance.accident || 0).toFixed(4)),
+          crowd_presence: Number((baselineImportance.crowd || 0).toFixed(4)),
+          protective: Number((baselineImportance.protective || 0).toFixed(4)),
+          lighting: Number((baselineImportance.lighting || 0).toFixed(4)),
+          time: Number((baselineImportance.time || 0).toFixed(4)),
+        },
+        avg_dynamic_weights: {
+          traffic: Number((dynamicWeightTotals.traffic / segments.length).toFixed(4)),
+          weather: Number((dynamicWeightTotals.weather / segments.length).toFixed(4)),
+          hazard: Number((dynamicWeightTotals.hazard / segments.length).toFixed(4)),
+          accident: Number((dynamicWeightTotals.accident / segments.length).toFixed(4)),
+          crowd_presence: Number((dynamicWeightTotals.crowd / segments.length).toFixed(4)),
+          protective: Number((dynamicWeightTotals.protective / segments.length).toFixed(4)),
+          lighting: Number((dynamicWeightTotals.lighting / segments.length).toFixed(4)),
+          time: Number((dynamicWeightTotals.time / segments.length).toFixed(4)),
+        },
       },
       segment_count: segments.length,
       segments: cleanedSegmentResults,
